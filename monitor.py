@@ -11,7 +11,10 @@ st.title("🏹 全球大资金偏好逻辑链监控面板")
 
 # 侧边栏配置
 st.sidebar.header("⚙️ 配置中心")
-fred_key = st.sidebar.text_input("输入你的 FRED API Key", type="password")
+if "fred_api_key" in st.secrets:
+    fred_key = st.secrets["fred_api_key"]
+else:
+    fred_key = st.sidebar.text_input("输入你的 FRED API Key", type="password")
 st.sidebar.caption("没有Key? 请去 fred.stlouisfed.org 免费申请")
 
 if not fred_key:
@@ -137,4 +140,5 @@ try:
 
 except Exception as e:
     st.error(f"数据处理出错: {e}")
+
     st.info("提示：如果是KeyError 'Close'，通常是网络连接Yahoo Finance失败，请检查网络或代理设置。")
