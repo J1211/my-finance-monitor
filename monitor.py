@@ -4,9 +4,6 @@ import pandas as pd
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
 from fredapi import Fred
-import requests
-from bs4 import BeautifulSoup
-import re
 
 # --- 1. 界面配置与美化 ---
 st.set_page_config(page_title="GSMI | 全球聪明钱监控面板", layout="wide")
@@ -17,7 +14,7 @@ st.markdown("""
     div[data-testid="stMetricValue"] { font-size: 32px; font-weight: bold; color: #00ffcc; }
     .stTabs [data-baseweb="tab-list"] { gap: 20px; }
     .stTabs [data-baseweb="tab"] { height: 50px; font-size: 16px; }
-    .standard-text { color: #888; font-size: 14px; margin-top: -10px; margin-bottom: 10px; }
+    .standard-text { color: #aaa; font-size: 14px; margin-top: -10px; margin-bottom: 10px; font-weight: bold; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -45,7 +42,7 @@ fms_crowded = st.sidebar.selectbox("当前最拥挤交易", ["美股大盘科技
 
 st.sidebar.markdown("---")
 st.sidebar.header("🎯 目标追踪")
-target_name = st.sidebar.text_input("关注板块名称", "中概 AI 龙头")
+target_name = st.sidebar.text_input("关注板块名称", "中概科技龙头")
 target_status = st.sidebar.radio("该板块目前拥挤度", ["冷清/低配", "标配", "极其拥挤"])
 
 # --- 3. 数据抓取与安全提取函数 ---
@@ -59,13 +56,11 @@ def fetch_macro_data():
         try:
             df = yf.download(ticker, start=start, end=end, progress=False)
             if df.empty: return pd.Series()
-            # 处理 MultiIndex
             data = df['Close'] if 'Close' in df.columns else df
             if isinstance(data, pd.DataFrame):
                 return data.iloc[:, 0].ffill().dropna()
             return data.ffill().dropna()
-        except:
-            return pd.Series()
+        except: return pd.Series()
 
     tips = fred.get_series('DFII10', start, end).ffill().dropna()
     spread = fred.get_series('BAMLH0A0HYM2', start, end).ffill().dropna()
@@ -85,24 +80,6 @@ def get_val(ser, pos=-1, default=0.0):
         return float(ser.iloc[pos])
     except: return default
 
-def scrape_sl886_short_ratio():
-    """尝试从 sl886.com 抓取大市沽空比率"""
-    url = "https://www.sl886.com/shortsell"
-    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
-    try:
-        response = requests.get(url, headers=headers, timeout=10)
-        if response.status_code == 200:
-            soup = BeautifulSoup(response.text, 'html.parser')
-            # 寻找包含“大市沽空比率”或类似的文本
-            text = soup.get_text()
-            # 匹配百分比，通常紧跟在大市沽空比率后面
-            match = re.search(r'大市沽空比率[:\s]*(\d+\.\d+)%', text)
-            if match:
-                return float(match.group(1))
-    except:
-        pass
-    return None
-
 # --- 4. 逻辑执行与评分算法 ---
 
 try:
@@ -121,10 +98,9 @@ try:
         curr_cg = get_val(cg_ratio, -1)
         ma200_cg_ser = cg_ratio.rolling(200).mean().dropna()
         ma200_cg = get_val(ma200_cg_ser, -1, curr_cg)
-    else:
-        curr_cg, ma200_cg = 0.0, 0.0
+    else: curr_cg, ma200_cg = 0.0, 0.0
 
-    # GSMI 评分
+    # GSMI 评分引擎 (40/30/30)
     s_tips = 20 if curr_tips < 1.0 else (10 if curr_tips <= 2.0 else 0)
     s_dxy = 20 if curr_dxy < 100 else (10 if curr_dxy <= 105 else 0)
     s_cash = 30 if fms_cash > 5.0 else (15 if fms_cash >= 4.0 else 0)
@@ -151,7 +127,7 @@ try:
         status_map = {"冷清/低配": "🟢 低位安全", "标配": "🟡 中性观望", "极其拥挤": "🔴 警惕踩踏"}
         st.markdown(f"**关注目标: {target_name}**")
         st.title(status_map[target_status])
-        st.warning(f"最拥挤交易: {fms_crowded}")
+        st.warning(f"全球最拥挤交易: {fms_crowded}")
 
     st.markdown("---")
     tabs = st.tabs(["💧 流动性", "🧠 情绪", "🏗️ 现实", "📉 执行确认"])
@@ -170,9 +146,9 @@ try:
     with tabs[1]:
         m1, m2 = st.columns(2)
         with m1:
-            st.metric("FMS 机构现金水平", f"{fms_cash}%", delta="看多" if fms_cash > 5 else "警示" if fms_cash < 4 else "中性")
+            st.metric("FMS 机构现金水平", f"{fms_cash}%", delta="反向看多" if fms_cash > 5 else "反向减仓" if fms_cash < 4 else "中性")
             st.markdown('<p class="standard-text">📊 标准: >5% 底部信号 (30分) | 4-5% 中性 (15分) | <4% 顶部预警 (0分)</p>', unsafe_allow_html=True)
-        with m2: st.info(f"发布日期: {fms_date}。最拥挤交易: {fms_crowded}。")
+        with m2: st.info(f"发布日期: {fms_date}。目前最拥挤交易: {fms_crowded}。建议从拥挤处撤离，布局低位板块。")
 
     with tabs[2]:
         r1, r2 = st.columns(2)
@@ -198,16 +174,9 @@ try:
             st.markdown('<p class="standard-text">📊 标准: 7.75 强方限制 | 7.85 弱方限制</p>', unsafe_allow_html=True)
         
         with e2:
-            # 尝试抓取 sl886
-            sl_val = scrape_sl886_short_ratio()
-            st.markdown(f"🔍 [点击查看 SL886 实时沽空比率](https://www.sl886.com/shortsell)")
-            if sl_val:
-                st.write(f"✅ 自动尝试抓取 SL886 成功: {sl_val}%")
-                hk_short_ratio = st.slider("大盘沽空比率 (%)", 5.0, 35.0, sl_val, 0.1)
-            else:
-                st.warning("自动抓取 SL886 受阻，请点击上方链接并手动输入")
-                hk_short_ratio = st.slider("手动录入：大盘沽空比率 (%)", 5.0, 35.0, 16.5, 0.1)
-            st.caption("注: >18% 易触发空头挤压爆发")
+            st.markdown(f"🔍 [点击查看 AASTOCKS 大市沽空比率](http://www.aastocks.com/tc/stocks/market/shortselling/securities-eligible.aspx)")
+            hk_short_ratio = st.slider("手动录入：大市沽空比率 (%)", 5.0, 35.0, 16.5, 0.1)
+            st.markdown('<p class="standard-text">📊 标准: >18% 易触发空头挤压下的暴力拉升</p>', unsafe_allow_html=True)
 
         st.write("---")
         st.subheader("📊 A股 vs 港股 相对强度对比 (近20日)")
@@ -231,13 +200,19 @@ try:
             st.plotly_chart(fig_dual, use_container_width=True)
             
             st.write("---")
-            st.subheader("🤖 系统决策建议")
+            st.subheader("🤖 GSMI 系统自动决策建议")
             if gsmi_total >= 70:
                 if gap > 1.5 and curr_hkd < 7.81:
-                    st.success(f"🌟 **强力进攻** | GSMI={gsmi_total}, 港股领涨 ({gap:+.2f}%), 汇率支持。建议重仓 [{target_name}]。")
-                else: st.success(f"✅ **温和配置** | 宏观分高，适合分批买入。")
-            elif gsmi_total < 45: st.error(f"❌ **全面防御** | 环境分低 ({gsmi_total})。警惕风险。")
-            else: st.warning(f"👉 **观望** | 环境中性。动能差: {gap:+.2f}%。")
+                    st.success(f"🌟 **强力进攻** | GSMI={gsmi_total}, 港股领涨 ({gap:+.2f}%), 汇率支持。建议重仓目标板块。")
+                else: st.success(f"✅ **温和配置** | 宏观分高，环境安全，适合分批买入。")
+            elif gsmi_total < 45: st.error(f"❌ **全面防御** | 环境分极低 ({gsmi_total})。避险为上。")
+            else: 
+                if gap > 2.0 and hk_short_ratio > 19:
+                    st.warning(f"⚠️ **空头回补风险** | 环境中性，但港股出现空头挤压。小心暴力脉冲后的回落。")
+                else: st.warning(f"👉 **持续观望** | 环境分中性 ({gsmi_total})。")
 
 except Exception as e:
     st.error(f"发生错误: {e}")
+
+st.markdown("---")
+st.caption("GSMI 逻辑系统 | 40% 流动性 + 30% 情绪 + 30% 现实。数据仅供复盘参考。")
