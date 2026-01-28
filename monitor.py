@@ -60,10 +60,16 @@ def fetch_data():
     tickers = {"DXY": "DX-Y.NYB", "Copper": "HG=F", "Gold": "GC=F", "HKD": "HKD=X"}
     raw_df = yf.download(list(tickers.values()), start=start, end=end, progress=False)
     
+    # 核心修复：显式处理多重索引并进行“列对列”清洗
     if isinstance(raw_df.columns, pd.MultiIndex):
-        price_df = raw_df['Close'].ffill().dropna()
+        # 提取收盘价层
+        price_df = raw_df['Close'].copy()
     else:
-        price_df = raw_df.ffill().dropna()
+        price_df = raw_df.copy()
+
+    # 重点：不要直接整个 dataframe.dropna()，因为不同指标休市日不同
+    # 我们保留所有日期，在绘图时再单独处理每一列
+    price_df = price_df.ffill() 
         
     return tips, price_df, spread
 
@@ -128,7 +134,6 @@ try:
     t1, t2, t3, t4 = st.tabs(["💧 流动性 (Liquidity)", "🧠 情绪 (Sentiment)", "🏗️ 现实 (Reality)", "📈 执行确认 (Execution)"])
 
     with t1:
-        # 第一排：指标数字展示
         col1, col2 = st.columns(2)
         
         tips_delta = curr_tips - prev_tips
@@ -137,16 +142,23 @@ try:
         with col1:
             st.metric("10Y TIPS (实际利率)", f"{curr_tips:.2f}%", f"{tips_delta:.4f}", delta_color="inverse")
             st.write("📊 **标准：** <1% 甜点区 | 1-2% 中性 | >2% 危险")
-            # 新增：TIPS 走势图 (反映全球资产重力)
-            # 备注：TIPS 数据来自 FRED，我们将其可视化
-            st.line_chart(tips_ser.tail(90), height=200) 
+            # TIPS 图表：确保数据是 Series 格式
+            st.line_chart(tips_ser.tail(90), height=200)
             st.caption("注：TIPS 下行 = 重力减小 = 估值扩张信号")
 
         with col2:
             st.metric("美元指数 (DXY)", f"{curr_dxy:.2f}", f"{dxy_delta:.2f}", delta_color="inverse")
             st.write("📊 **标准：** <100 爆发区 | 100-105 平衡 | >105 危险")
-            # 美元指数走势图
-            st.line_chart(price_df["DX-Y.NYB"].tail(90), height=200)
+            
+            # 核心修复：显式定位 DXY 列名，并单独清洗该列数据
+            # 即使 price_df 包含其他列的空值，这里也只关注美元
+            dxy_plot_data = price_df["DX-Y.NYB"].dropna().tail(90)
+            
+            if not dxy_plot_data.empty:
+                st.line_chart(dxy_plot_data, height=200)
+            else:
+                st.warning("暂未抓取到美元指数历史趋势，请检查网络。")
+                
             st.caption("注：美元下行 = 水泵开启 = 资金流向非美市场信号")
 
     with t2:
@@ -283,6 +295,7 @@ except Exception as e:
 
 st.markdown("---")
 st.caption("GSMI 逻辑系统 | 40% 流动性 + 30% 情绪 + 30% 现实。请定期更新侧边栏 FMS 数据。")
+
 
 
 
