@@ -128,13 +128,26 @@ try:
     t1, t2, t3, t4 = st.tabs(["💧 流动性 (Liquidity)", "🧠 情绪 (Sentiment)", "🏗️ 现实 (Reality)", "📈 执行确认 (Execution)"])
 
     with t1:
+        # 第一排：指标数字展示
         col1, col2 = st.columns(2)
-        col1.metric("10Y TIPS (实际利率)", f"{curr_tips:.2f}%", f"{curr_tips-prev_tips:.4f}", delta_color="inverse")
-        col1.write("📊 **标准：** <1% 甜点区 (20分) | 1-2% 中性 (10分) | >2% 危险 (0分)")
         
-        col2.metric("美元指数 (DXY)", f"{curr_dxy:.2f}", f"{curr_dxy-prev_dxy:.2f}", delta_color="inverse")
-        col2.write("📊 **标准：** <100 爆发区 (20分) | 100-105 平衡 (10分) | >105 危险 (0分)")
-        st.line_chart(price_df["DX-Y.NYB"].tail(90))
+        tips_delta = curr_tips - prev_tips
+        dxy_delta = curr_dxy - prev_dxy
+        
+        with col1:
+            st.metric("10Y TIPS (实际利率)", f"{curr_tips:.2f}%", f"{tips_delta:.4f}", delta_color="inverse")
+            st.write("📊 **标准：** <1% 甜点区 | 1-2% 中性 | >2% 危险")
+            # 新增：TIPS 走势图 (反映全球资产重力)
+            # 备注：TIPS 数据来自 FRED，我们将其可视化
+            st.line_chart(tips_ser.tail(90), height=200) 
+            st.caption("注：TIPS 下行 = 重力减小 = 估值扩张信号")
+
+        with col2:
+            st.metric("美元指数 (DXY)", f"{curr_dxy:.2f}", f"{dxy_delta:.2f}", delta_color="inverse")
+            st.write("📊 **标准：** <100 爆发区 | 100-105 平衡 | >105 危险")
+            # 美元指数走势图
+            st.line_chart(price_df["DX-Y.NYB"].tail(90), height=200)
+            st.caption("注：美元下行 = 水泵开启 = 资金流向非美市场信号")
 
     with t2:
         m1, m2 = st.columns(2)
@@ -270,6 +283,7 @@ except Exception as e:
 
 st.markdown("---")
 st.caption("GSMI 逻辑系统 | 40% 流动性 + 30% 情绪 + 30% 现实。请定期更新侧边栏 FMS 数据。")
+
 
 
 
