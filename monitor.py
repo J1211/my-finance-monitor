@@ -156,33 +156,43 @@ try:
         fig_cg.update_layout(height=300, template="plotly_dark", margin=dict(l=10, r=10, t=10, b=10))
         st.plotly_chart(fig_cg, use_container_width=True)
 
+    # --- 第四层：执行确认 (增强版逻辑) ---
     with t4:
         e1, e2 = st.columns(2)
+        
+        # 1. 港元汇率 (保持原有)
         e1.metric("港元汇率 (USD/HKD)", f"{curr_hkd:.4f}", 
-                  delta="流出" if curr_hkd > 7.84 else ("流入" if curr_hkd < 7.78 else "平稳"))
-        e1.write("📊 **标准：** 7.75 强力吸金 | 7.85 资金撤离")
+                  delta="流出" if curr_hkd > 7.84 else ("流入" if curr_hkd < 7.76 else "平稳"))
+        
+        # 2. 新增：港股沽空比率监控 (建议手动录入最新观察值或参考成交额)
+        # 港股大盘沽空比率 15-20% 为高位，说明空头极其拥挤
+        hk_short_ratio = st.slider("港股大盘沽空比率 (%)", 5.0, 30.0, 15.0, 0.5)
+        if hk_short_ratio > 20.0 and gsmi_total > 60:
+            st.warning(f"🚀 **潜在空头挤压:** 沽空比率 ({hk_short_ratio}%) 极高，配合宏观分回升，可能出现暴力反弹。")
         
         st.write("---")
-        st.subheader("🛠️ 最终决策逻辑确认")
-        n_flow = st.select_slider("A股资金流 (北向/主力)", ["大幅流出", "平稳", "大幅流入"], value="平稳")
-        s_flow = st.select_slider("港股资金流 (南向/港元汇率)", ["大幅流出", "平稳", "大幅流入"], value="平稳")
         
-        # 决策逻辑增强
-        if gsmi_total >= 80 and n_flow == "大幅流入":
-            st.success(f"🌟 **强烈推荐入场:** 环境总分极高 ({gsmi_total}) 且资金流共振。目标 [{target_name}] 胜率极大。")
-        elif gsmi_total >= 60 and n_flow == "大幅流入":
-            st.success(f"✅ **右侧确认:** 宏观环境转好，资金已开始实操买入。")
-        elif gsmi_total >= 60 and n_flow == "大幅流出":
-            st.warning(f"⚠️ **诱多警告:** 宏观分高但 A 股资金在撤离。可能是利好不涨，警惕陷阱。")
-        elif gsmi_total < 40 and n_flow == "大幅流入":
-            st.info(f"📉 **反弹性质:** 环境依然恶劣，此时流入多为短期抄底或护盘，不建议重仓。")
-        elif gsmi_total < 40:
-            st.error(f"❌ **防御模式:** 环境总分极低 ({gsmi_total})，建议持币观望，保护本金。")
-        else:
-            st.write("👉 请根据 GSMI 总分与实际资金流向的背离关系做出判断。")
+        # 3. 优化：南北向资金动能对比 (取代纯手动滑块)
+        st.subheader("📊 两地市场动能对比 (5日累积)")
+        
+        # 获取沪深300和恒生指数作为代理
+        proxy_data = yf.download(["000300.SS", "^HSI"], period="20d", progress=False)['Close']
+        # 计算归一化收益率 (0-100)
+        norm_data = (proxy_data / proxy_data.iloc[0]) * 100
+        
+        fig_proxy = go.Figure()
+        fig_proxy.add_trace(go.Scatter(x=norm_data.index, y=norm_data["000300.SS"], name="A股 (沪深300)"))
+        fig_proxy.add_trace(go.Scatter(x=norm_data.index, y=norm_data["^HSI"], name="港股 (恒生指数)"))
+        fig_proxy.update_layout(height=300, title="两地市场相对强度 (基准=100)")
+        st.plotly_chart(fig_proxy, use_container_width=True)
+        
+        # 决策自动提示
+        if norm_data["^HSI"].iloc[-1] > norm_data["000300.SS"].iloc[-1] and gsmi_total > 50:
+            st.info("💡 **观察到背离:** 港股表现强于 A 股，全球资金可能正在通过港股率先调仓。")
 
 except Exception as e:
     st.error(f"数据处理异常: {e}")
 
 st.markdown("---")
 st.caption("GSMI 逻辑系统 | 40% 流动性 + 30% 情绪 + 30% 现实。请定期更新侧边栏 FMS 数据。")
+
