@@ -162,12 +162,71 @@ try:
         hk_short_ratio = e2.slider("手动录入：当日全市场沽空比 (%)", 5.0, 30.0, 16.5, 0.1)
         
         st.write("---")
+
         st.subheader("📊 A股 vs 港股 相对强度 (近20日)")
-        # 动能图表修复
-        combined = pd.concat([hsi_ser, as300_ser], axis=1).ffill().bfill().tail(20)
-        combined.columns = ["HSI", "AS300"]
+        
+        # 数据清洗与归一化
+        combined = pd.concat([as300_ser, hsi_ser], axis=1).ffill().bfill().tail(20)
+        combined.columns = ["AS300", "HSI"]
         norm_combined = (combined / combined.iloc[0]) * 100
-        st.line_chart(norm_combined)
+        
+        # 计算 Y 轴范围，确保 100 处于中心偏置或有足够观察空间
+        y_min = norm_combined.min().min()
+        y_max = norm_combined.max().max()
+        padding = (y_max - y_min) * 0.2  # 增加 20% 的上下缓冲
+        
+        fig_dual = go.Figure()
+
+        # 增加 100 基准参考线
+        fig_dual.add_shape(
+            type="line", line=dict(color="white", width=1, dash="dot"),
+            x0=norm_combined.index[0], x1=norm_combined.index[-1], y0=100, y1=100
+        )
+
+        # A股：极光红
+        fig_dual.add_trace(go.Scatter(
+            x=norm_combined.index, y=norm_combined["AS300"], 
+            name="A股 (沪深300)", line=dict(color='#FF3131', width=4)
+        ))
+        
+        # 港股：霓虹蓝
+        fig_dual.add_trace(go.Scatter(
+            x=norm_combined.index, y=norm_combined["HSI"], 
+            name="港股 (恒生指数)", line=dict(color='#00D4FF', width=4)
+        ))
+        
+        fig_dual.update_layout(
+            height=450,
+            template="plotly_dark",
+            paper_bgcolor="#0e1117",
+            plot_bgcolor="#0e1117",
+            margin=dict(l=10, r=10, t=30, b=10),
+            hovermode="x unified",
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+            # Y 轴优化
+            yaxis=dict(
+                title="收益率变动 (点)",
+                tickformat=".1f", # 保留一位小数
+                gridcolor='#333',
+                zeroline=True,
+                zerolinecolor='#666',
+                zerolinewidth=2,
+                dtick=2, # 每 2% 设置一个硬刻度，方便对比
+                range=[y_min - padding, y_max + padding] # 动态范围
+            ),
+            xaxis=dict(gridcolor='#333', showgrid=True)
+        )
+        
+        # 在图表上直接标注当前的动能差
+        gap = float(norm_combined["HSI"].iloc[-1] - norm_combined["AS300"].iloc[-1])
+        fig_dual.add_annotation(
+            x=norm_combined.index[-1], y=norm_combined["HSI"].iloc[-1],
+            text=f" 动能差: {gap:+.2f}%",
+            showarrow=True, arrowhead=1, ax=50, ay=-30,
+            bgcolor="#00D4FF", font=dict(color="black", size=12)
+        )
+        
+        st.plotly_chart(fig_dual, use_container_width=True)
         
         # 🤖 自动决策建议
         hsi_p = norm_combined["HSI"].iloc[-1]
@@ -186,3 +245,4 @@ try:
 
 except Exception as e:
     st.error(f"数据加载失败: {e}")
+
