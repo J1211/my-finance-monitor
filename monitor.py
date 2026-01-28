@@ -4,9 +4,11 @@ import pandas as pd
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
 from fredapi import Fred
-import akshare as ak
+import requests
+from bs4 import BeautifulSoup
+import re
 
-# --- 1. 配置与界面美化 ---
+# --- 1. 界面配置与美化 ---
 st.set_page_config(page_title="GSMI | 全球聪明钱监控面板", layout="wide")
 
 st.markdown("""
@@ -30,7 +32,7 @@ else:
     fred_key = st.sidebar.text_input("FRED API Key", type="password")
 
 if not fred_key:
-    st.warning("请在侧边栏配置 FRED API Key 以激活数据。")
+    st.warning("请在侧边栏配置 FRED API Key。")
     st.stop()
 
 fred = Fred(api_key=fred_key)
@@ -46,7 +48,7 @@ st.sidebar.header("🎯 目标追踪")
 target_name = st.sidebar.text_input("关注板块名称", "中概 AI 龙头")
 target_status = st.sidebar.radio("该板块目前拥挤度", ["冷清/低配", "标配", "极其拥挤"])
 
-# --- 3. 稳健的数据抓取与安全提取函数 ---
+# --- 3. 数据抓取与安全提取函数 ---
 
 @st.cache_data(ttl=3600)
 def fetch_macro_data():
@@ -57,9 +59,11 @@ def fetch_macro_data():
         try:
             df = yf.download(ticker, start=start, end=end, progress=False)
             if df.empty: return pd.Series()
-            if isinstance(df.columns, pd.MultiIndex):
-                return df['Close'].iloc[:, 0].ffill().dropna()
-            return df['Close'].ffill().dropna()
+            # 处理 MultiIndex
+            data = df['Close'] if 'Close' in df.columns else df
+            if isinstance(data, pd.DataFrame):
+                return data.iloc[:, 0].ffill().dropna()
+            return data.ffill().dropna()
         except:
             return pd.Series()
 
@@ -75,21 +79,26 @@ def fetch_macro_data():
     return tips, dxy, copper, gold, spread, hkd, hsi, as300
 
 def get_val(ser, pos=-1, default=0.0):
-    """安全提取 Series 值的工具函数，防止越界"""
-    if ser is None or len(ser) == 0:
-        return default
+    if ser is None or len(ser) == 0: return default
     try:
-        if abs(pos) > len(ser): # 如果要取的数据点超过了序列长度
-            return float(ser.iloc[0])
+        if abs(pos) > len(ser): return float(ser.iloc[0])
         return float(ser.iloc[pos])
-    except:
-        return default
+    except: return default
 
-def get_hk_short_ratio_auto():
+def scrape_sl886_short_ratio():
+    """尝试从 sl886.com 抓取大市沽空比率"""
+    url = "https://www.sl886.com/shortsell"
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
     try:
-        df = ak.stock_hk_short_sell_summary_em()
-        if not df.empty:
-            return float(df.iloc[0]['沽空金额占总成交额比'])
+        response = requests.get(url, headers=headers, timeout=10)
+        if response.status_code == 200:
+            soup = BeautifulSoup(response.text, 'html.parser')
+            # 寻找包含“大市沽空比率”或类似的文本
+            text = soup.get_text()
+            # 匹配百分比，通常紧跟在大市沽空比率后面
+            match = re.search(r'大市沽空比率[:\s]*(\d+\.\d+)%', text)
+            if match:
+                return float(match.group(1))
     except:
         pass
     return None
@@ -99,7 +108,6 @@ def get_hk_short_ratio_auto():
 try:
     tips_ser, dxy_ser, copper_ser, gold_ser, spread_ser, hkd_ser, hsi_ser, as300_ser = fetch_macro_data()
 
-    # 安全提取数值
     curr_tips = get_val(tips_ser, -1)
     prev_tips = get_val(tips_ser, -5)
     curr_dxy = get_val(dxy_ser, -1)
@@ -108,7 +116,6 @@ try:
     prev_spread = get_val(spread_ser, -5)
     curr_hkd = get_val(hkd_ser, -1)
     
-    # 铜金比与均线
     if not copper_ser.empty and not gold_ser.empty:
         cg_ratio = (copper_ser / gold_ser).dropna()
         curr_cg = get_val(cg_ratio, -1)
@@ -117,7 +124,7 @@ try:
     else:
         curr_cg, ma200_cg = 0.0, 0.0
 
-    # --- GSMI 评分引擎 ---
+    # GSMI 评分
     s_tips = 20 if curr_tips < 1.0 else (10 if curr_tips <= 2.0 else 0)
     s_dxy = 20 if curr_dxy < 100 else (10 if curr_dxy <= 105 else 0)
     s_cash = 30 if fms_cash > 5.0 else (15 if fms_cash >= 4.0 else 0)
@@ -127,12 +134,11 @@ try:
 
     # --- 5. UI 展示 ---
 
-    # 顶部仪表盘
     c_score, c_radar = st.columns([2, 1])
     with c_score:
         fig = go.Figure(go.Indicator(
             mode = "gauge+number", value = gsmi_total,
-            title = {'text': f"GSMI 总分 ({datetime.now().strftime('%m-%d')})", 'font': {'size': 20}},
+            title = {'text': f"GSMI 环境总分 ({datetime.now().strftime('%m-%d')})", 'font': {'size': 20}},
             gauge = {'axis': {'range': [0, 100]}, 'bar': {'color': "#00ffcc"},
                      'steps': [{'range': [0, 40], 'color': "#441111"}, {'range': [40, 60], 'color': "#444411"},
                                {'range': [60, 80], 'color': "#114411"}, {'range': [80, 100], 'color': "#006644"}]}
@@ -145,31 +151,30 @@ try:
         status_map = {"冷清/低配": "🟢 低位安全", "标配": "🟡 中性观望", "极其拥挤": "🔴 警惕踩踏"}
         st.markdown(f"**关注目标: {target_name}**")
         st.title(status_map[target_status])
-        st.warning(f"全球最拥挤交易: {fms_crowded}")
+        st.warning(f"最拥挤交易: {fms_crowded}")
 
     st.markdown("---")
-    t1, t2, t3, t4 = st.tabs(["💧 流动性", "🧠 情绪", "🏗️ 现实", "📉 执行确认"])
+    tabs = st.tabs(["💧 流动性", "🧠 情绪", "🏗️ 现实", "📉 执行确认"])
 
-    with t1:
+    with tabs[0]:
         col1, col2 = st.columns(2)
         with col1:
             st.metric("10Y TIPS (实际利率)", f"{curr_tips:.2f}%", f"{curr_tips-prev_tips:.4f}", delta_color="inverse")
-            st.markdown('<p class="standard-text">📊 标准: <1% 甜点区 (20分) | 1-2% 中性 (10分) | >2% 危险 (0分)</p>', unsafe_allow_html=True)
+            st.markdown('<p class="standard-text">📊 标准: <1% 甜点 (20分) | 1-2% 中性 (10分) | >2% 危险 (0分)</p>', unsafe_allow_html=True)
             if not tips_ser.empty: st.area_chart(tips_ser.tail(90), height=200)
         with col2:
             st.metric("美元指数 (DXY)", f"{curr_dxy:.2f}", f"{curr_dxy-prev_dxy:.2f}", delta_color="inverse")
-            st.markdown('<p class="standard-text">📊 标准: <100 爆发区 (20分) | 100-105 平衡 (10分) | >105 危险 (0分)</p>', unsafe_allow_html=True)
+            st.markdown('<p class="standard-text">📊 标准: <100 爆发 (20分) | 100-105 平衡 (10分) | >105 危险 (0分)</p>', unsafe_allow_html=True)
             if not dxy_ser.empty: st.area_chart(dxy_ser.tail(90), height=200)
 
-    with t2:
+    with tabs[1]:
         m1, m2 = st.columns(2)
         with m1:
-            st.metric("FMS 机构现金水平", f"{fms_cash}%", delta="反向看多" if fms_cash > 5 else "风险预警" if fms_cash < 4 else "中性")
+            st.metric("FMS 机构现金水平", f"{fms_cash}%", delta="看多" if fms_cash > 5 else "警示" if fms_cash < 4 else "中性")
             st.markdown('<p class="standard-text">📊 标准: >5% 底部信号 (30分) | 4-5% 中性 (15分) | <4% 顶部预警 (0分)</p>', unsafe_allow_html=True)
-        with m2:
-            st.info(f"发布日期: {fms_date}。当前最拥挤交易: {fms_crowded}。")
+        with m2: st.info(f"发布日期: {fms_date}。最拥挤交易: {fms_crowded}。")
 
-    with t3:
+    with tabs[2]:
         r1, r2 = st.columns(2)
         with r1:
             st.metric("高收益债利差", f"{curr_spread:.0f} bps", f"{curr_spread-prev_spread:.0f}", delta_color="inverse")
@@ -177,38 +182,40 @@ try:
         with r2:
             st.metric("铜金比趋势", f"{curr_cg:.4f}", "高于200MA" if curr_cg > ma200_cg else "低于200MA")
             st.markdown('<p class="standard-text">📊 标准: >200日均线 扩张 (10分) | <200日均线 萎缩 (0分)</p>', unsafe_allow_html=True)
-        
-        if not copper_ser.empty and not gold_ser.empty:
+        if not cg_ratio.empty:
             fig_cg = go.Figure()
             fig_cg.add_trace(go.Scatter(x=cg_ratio.index[-120:], y=cg_ratio.values[-120:], name="铜金比", line=dict(color='#00ffcc')))
-            fig_cg.add_trace(go.Scatter(x=cg_ratio.index[-120:], y=ma200_cg_ser.index[-120:], name="200MA", line=dict(dash='dash', color='white')))
+            fig_cg.add_trace(go.Scatter(x=ma200_cg_ser.index[-120:], y=ma200_cg_ser.values[-120:], name="200MA", line=dict(dash='dash', color='white')))
             fig_cg.update_layout(height=300, template="plotly_dark", margin=dict(l=10, r=10, t=10, b=10))
             st.plotly_chart(fig_cg, use_container_width=True)
 
-    with t4:
+    with tabs[3]:
         st.subheader("🌉 港股与跨境流动性确认")
         e1, e2 = st.columns(2)
         with e1:
             fx_tag = "吸金" if curr_hkd < 7.78 else ("失血" if curr_hkd > 7.84 else "平稳")
             st.metric("港元汇率 (USD/HKD)", f"{curr_hkd:.4f}", fx_tag, delta_color="normal" if curr_hkd < 7.80 else "inverse")
             st.markdown('<p class="standard-text">📊 标准: 7.75 强方限制 | 7.85 弱方限制</p>', unsafe_allow_html=True)
+        
         with e2:
-            auto_val = get_hk_short_ratio_auto()
-            if auto_val:
-                st.write("✅ 自动抓取成功")
-                hk_short_ratio = st.slider("当前全市场沽空比 (%)", 5.0, 35.0, auto_val, 0.1)
+            # 尝试抓取 sl886
+            sl_val = scrape_sl886_short_ratio()
+            st.markdown(f"🔍 [点击查看 SL886 实时沽空比率](https://www.sl886.com/shortsell)")
+            if sl_val:
+                st.write(f"✅ 自动尝试抓取 SL886 成功: {sl_val}%")
+                hk_short_ratio = st.slider("大盘沽空比率 (%)", 5.0, 35.0, sl_val, 0.1)
             else:
-                st.warning("自动抓取受阻")
-                hk_short_ratio = st.slider("手动录入：全市场沽空比 (%)", 5.0, 35.0, 16.5, 0.1)
+                st.warning("自动抓取 SL886 受阻，请点击上方链接并手动输入")
+                hk_short_ratio = st.slider("手动录入：大盘沽空比率 (%)", 5.0, 35.0, 16.5, 0.1)
             st.caption("注: >18% 易触发空头挤压爆发")
 
         st.write("---")
         st.subheader("📊 A股 vs 港股 相对强度对比 (近20日)")
-        
         if not as300_ser.empty and not hsi_ser.empty:
             comb = pd.concat([as300_ser, hsi_ser], axis=1).ffill().bfill().tail(20)
             comb.columns = ["AS300", "HSI"]
             norm = (comb / comb.iloc[0]) * 100
+            y_min, y_max = norm.min().min(), norm.max().max()
             
             fig_dual = go.Figure()
             fig_dual.add_shape(type="line", x0=norm.index[0], x1=norm.index[-1], y0=100, y1=100, line=dict(color="white", width=1, dash="dot"))
@@ -217,7 +224,7 @@ try:
             
             gap = float(norm["HSI"].iloc[-1] - norm["AS300"].iloc[-1])
             fig_dual.update_layout(height=450, template="plotly_dark", hovermode="x unified",
-                                   yaxis=dict(title="收益率", tickformat=".1f", dtick=2),
+                                   yaxis=dict(title="收益率 (100=基准)", tickformat=".1f", dtick=2, range=[y_min-1, y_max+1]),
                                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
             fig_dual.add_annotation(x=norm.index[-1], y=norm["HSI"].iloc[-1], text=f" 动能差: {gap:+.2f}%", 
                                     showarrow=True, arrowhead=1, ax=40, ay=-30, bgcolor="#00D4FF", font=dict(color="black"))
@@ -227,15 +234,10 @@ try:
             st.subheader("🤖 系统决策建议")
             if gsmi_total >= 70:
                 if gap > 1.5 and curr_hkd < 7.81:
-                    st.success(f"🌟 **强力进攻** | GSMI={gsmi_total}, 港股强势, 汇率支持。")
-                else:
-                    st.success("✅ **温和配置** | 宏观分支持。")
-            elif gsmi_total < 45:
-                st.error(f"❌ **全面防御** | GSMI={gsmi_total}。建议轻仓。")
-            else:
-                st.write("👉 **观望** | 环境中性。")
-        else:
-            st.error("无法获取两地对比数据，请检查网络。")
+                    st.success(f"🌟 **强力进攻** | GSMI={gsmi_total}, 港股领涨 ({gap:+.2f}%), 汇率支持。建议重仓 [{target_name}]。")
+                else: st.success(f"✅ **温和配置** | 宏观分高，适合分批买入。")
+            elif gsmi_total < 45: st.error(f"❌ **全面防御** | 环境分低 ({gsmi_total})。警惕风险。")
+            else: st.warning(f"👉 **观望** | 环境中性。动能差: {gap:+.2f}%。")
 
 except Exception as e:
-    st.error(f"发生未预见的错误: {e}")
+    st.error(f"发生错误: {e}")
