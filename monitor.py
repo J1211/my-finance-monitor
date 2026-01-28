@@ -157,57 +157,56 @@ try:
         st.plotly_chart(fig_cg, use_container_width=True)
 
     with t4:
-        # --- A. 顶部指标栏 ---
+        # --- A. 顶部关键指标栏 ---
         e1, e2 = st.columns(2)
         
         # 1. 港元汇率 (反映全球资金进出香港的真实意愿)
         current_hkd = float(price_df["HKD=X"].iloc[-1])
+        fx_strength = "强" if current_hkd < 7.80 else ("弱" if current_hkd > 7.84 else "中性")
+        
         e1.metric("港元汇率 (USD/HKD)", f"{current_hkd:.4f}", 
-                  delta="流出" if current_hkd > 7.83 else ("流入" if current_hkd < 7.78 else "平稳"))
+                  delta=f"资金{fx_strength}势", 
+                  delta_color="normal" if fx_strength=="强" else "inverse")
         e1.write("📊 **标准：** 7.75 强力吸金 | 7.85 资金撤离")
         
-        # 2. 港股沽空比率 (半自动：一键查数 + 手动确认)
-        short_url = "http://www.aastocks.com/tc/stocks/market/short-selling/market-short-selling-ratio.aspx"
-        e2.markdown(f"🔗 [点击此处查看今日真实沽空比率]({short_url})")
-        hk_short_ratio = e2.slider("手动录入：当日大盘沽空比率 (%)", 5.0, 35.0, 16.5, 0.1)
-        e2.caption("注：>18% 为高位，预示潜在的“空头挤压”暴力反弹动力。")
+        # 2. 港股沽空比率 (更新了稳定的东方财富/富途链接)
+        st.markdown("""<style> .stSlider { padding-bottom: 20px; } </style>""", unsafe_allow_html=True)
+        e2.markdown(f"🔗 [查数1：东方财富-港股沽空] (https://data.eastmoney.com/hk/gkcf.html)")
+        e2.markdown(f"🔗 [查数2：富途-港股沽空分析] (https://www.futunn.com/quote/hk/market-short-sell)")
+        
+        hk_short_ratio = e2.slider("手动录入：今日大盘沽空比率 (%)", 5.0, 35.0, 16.5, 0.1)
+        e2.caption("提示：>18% 预示潜在空头回补导致的爆发力。")
         
         st.write("---")
         
-        # --- B. 两地市场动能对比图 (修复港股线消失问题) ---
+        # --- B. 两地市场动能对比图 (深度修复版) ---
         st.subheader("📊 A股 vs 港股 相对强度对比 (近20日)")
         
-        # 抓取对比数据
+        # 抓取数据
         proxy_tickers = ["000300.SS", "^HSI"]
-        # 多抓一点数据以防节假日导致的开头缺失
-        proxy_raw = yf.download(proxy_tickers, period="40d", progress=False)
+        proxy_raw = yf.download(proxy_tickers, period="45d", progress=False)
         
         if not proxy_raw.empty and 'Close' in proxy_raw:
-            # 1. 提取收盘价并强制打平 MultiIndex
+            # 1. 提取 Close 并强制降维
             proxy_close = proxy_raw['Close'].copy()
             
             # 2. 核心修复：处理节假日不一致导致的 NaN
-            # 先用 ffill 填补中间的节假日，再用 bfill 确保第一行不是 NaN
+            # 先用 ffill (前向填充) 解决中间断点，再用 bfill (后向填充) 解决第一行缺失
             proxy_clean = proxy_close.ffill().bfill()
             
-            # 3. 提取最近 20 条有效交易记录
+            # 3. 截取最近20个交易日并归一化 (基准=100)
             plot_df = proxy_clean.tail(20)
+            base_price = plot_df.iloc[0]
+            norm_data = (plot_df / base_price) * 100
             
-            # 4. 归一化计算：以这 20 天的第一天为基准 (100)
-            # 即使第一天是缺失值，刚才的 bfill 已经把它补齐了
-            base_values = plot_df.iloc[0]
-            norm_data = (plot_df / base_values) * 100
-            
-            # 5. 绘图
+            # 4. 绘图
             fig_proxy = go.Figure()
-            
             # A股线 (红色)
             if "000300.SS" in norm_data.columns:
                 fig_proxy.add_trace(go.Scatter(
                     x=norm_data.index, y=norm_data["000300.SS"], 
                     name="A股 (沪深300)", line=dict(color='#ff4b4b', width=3)
                 ))
-            
             # 港股线 (蓝色)
             if "^HSI" in norm_data.columns:
                 fig_proxy.add_trace(go.Scatter(
@@ -216,50 +215,61 @@ try:
                 ))
             
             fig_proxy.update_layout(
-                height=400,
-                template="plotly_dark",
-                hovermode="x unified",
+                height=400, template="plotly_dark", hovermode="x unified",
                 legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
                 margin=dict(l=10, r=10, t=30, b=10),
                 yaxis_title="收益率 (基准=100)"
             )
             st.plotly_chart(fig_proxy, use_container_width=True)
             
-            # --- C. 动态决策解读 ---
+            # --- C. 🤖 GSMI 系统自动决策引擎 ---
+            st.write("---")
+            st.subheader("🤖 GSMI 系统自动决策建议")
+            
+            # 计算动能差值
             as_perf = float(norm_data["000300.SS"].iloc[-1])
             hsi_perf = float(norm_data["^HSI"].iloc[-1])
+            momentum_gap = hsi_perf - as_perf  # 港股相对于 A 股的强弱
             
-            st.write("---")
-            st.subheader("🛠️ 最终决策确认")
-            
-            # 模拟资金流向滑动条 (手动录入以辅助决策)
-            n_flow = st.select_slider("当前外资/北向入场体感", ["大幅流出", "平稳", "大幅流入"], value="平稳")
-            
-            # 自动化逻辑研判
+            # 自动化决策矩阵
             if gsmi_total >= 70:
-                if hk_short_ratio > 19 and hsi_perf > as_perf:
-                    st.success(f"🌟 **极佳爆发点：** 环境分高 ({gsmi_total}) + 港股走强 + 高沽空比率。空头挤压可能正在发生！")
-                elif n_flow == "大幅流入":
-                    st.success(f"✅ **右侧确认：** 宏观环境与资金流向共振。适合增加 [{target_name}] 仓位。")
+                if momentum_gap > 1.5 and current_hkd < 7.81:
+                    st.success(f"🌟 **级别：强力进攻 (Aggressive)** \n\n **逻辑：** 宏观分高 ({gsmi_total}) + 港股领涨 + 汇率支持。大资金正在通过港股扫货，建议积极配置 [{target_name}]。")
+                elif momentum_gap < -1.5:
+                    st.success(f"✅ **级别：内资驱动 (Domestic Led)** \n\n **逻辑：** 环境理想但 A 股强于港股。主要是内资情绪先行，外资仍在观望。建议关注大盘蓝筹。")
                 else:
-                    st.info("💡 **环境支持：** 宏观分值不错，但两地动能尚未形成合力，建议分批试探。")
+                    st.success(f"✅ **级别：温和配置 (Neutral Buy)** \n\n **逻辑：** 宏观环境理想，两地走势同步。适合分批建立头寸。")
             
-            elif gsmi_total < 40:
-                st.error(f"❌ **环境恶劣：** 宏观分极低 ({gsmi_total})。即便局部反弹也是风险，建议保持轻仓或空仓。")
-            
-            else:
-                if hsi_perf > as_perf + 3:
-                    st.warning("🧐 **背离预警：** 港股显著强于 A 股，通常是大资金回流的前兆，关注 A 股补涨机会。")
+            elif 45 <= gsmi_total < 70:
+                if momentum_gap > 2.0:
+                    st.warning(f"⚠️ **级别：空头挤压/存量博弈** \n\n **逻辑：** 环境分一般，但港股突发异动。多为高沽空下的空头踩踏，注意回落风险，不宜追高。")
+                elif hk_short_ratio > 20:
+                    st.info(f"🧐 **级别：底部伏击** \n\n **逻辑：** 环境分处于回升期，且沽空比率极高 ({hk_short_ratio}%)。等待汇率转强作为最后发令枪。")
                 else:
-                    st.write("👉 请结合 GSMI 总分与滑块确认最终执行。")
+                    st.write("👉 **级别：观望 (Wait & See)** \n\n **逻辑：** 环境处于震荡期，无明确趋势信号。建议保持低仓位。")
+            
+            else:  # GSMI < 45
+                if momentum_gap > 0:
+                    st.error(f"❌ **级别：诱多陷阱 (Bull Trap)** \n\n **逻辑：** 宏观看板处于高危区 ({gsmi_total})，即便港股反弹也缺乏根基。减仓避险为上。")
+                else:
+                    st.error(f"❌ **级别：全面防御 (Defensive)** \n\n **逻辑：** 宏观与资金面双杀。保护本金，等待下一次系统性机会。")
 
+            # 特殊情况手动修正
+            with st.expander("🛠️ 特殊情况手动修正 (如重大政策出台)"):
+                manual_fix = st.checkbox("开启政策/突发利好修正")
+                if manual_fix:
+                    impact = st.select_slider("政策影响评估", ["利空", "中性", "重大利好"], value="中性")
+                    if impact == "重大利好":
+                        st.balloons()
+                        st.success("检测到国家级政策支撑，系统建议已手动上调一级。")
         else:
-            st.error("无法获取对比数据，请检查网络是否能访问 Yahoo Finance。")
+            st.error("无法获取对比数据。请检查网络是否能访问 Yahoo Finance 的 A 股与港股数据。")
 
 except Exception as e:
     st.error(f"数据处理异常: {e}")
 
 st.markdown("---")
 st.caption("GSMI 逻辑系统 | 40% 流动性 + 30% 情绪 + 30% 现实。请定期更新侧边栏 FMS 数据。")
+
 
 
