@@ -82,9 +82,20 @@ def get_val(ser, pos=-1, default=0.0):
 
 # --- 4. 逻辑执行与评分算法 ---
 
+# --- 4. 逻辑执行与评分算法 ---
+
 try:
+    # 这一行调用函数获取数据
     tips_ser, dxy_ser, copper_ser, gold_ser, spread_ser, hkd_ser, hsi_ser, as300_ser = fetch_macro_data()
 
+    # 【新增：数据源日期核对】
+    with st.expander("📅 查看各数据源最后更新时间"):
+        col_t1, col_t2, col_t3 = st.columns(3)
+        col_t1.write(f"FRED (利率/利差): {tips_ser.index[-1].strftime('%Y-%m-%d')}")
+        col_t2.write(f"美股 (美元/铜金): {dxy_ser.index[-1].strftime('%Y-%m-%d %H:%M')}")
+        col_t3.write(f"亚洲 (A股/港股): {as300_ser.index[-1].strftime('%Y-%m-%d')}")
+
+    # 以下是提取数值逻辑
     curr_tips = get_val(tips_ser, -1)
     prev_tips = get_val(tips_ser, -5)
     curr_dxy = get_val(dxy_ser, -1)
@@ -100,7 +111,7 @@ try:
         ma200_cg = get_val(ma200_cg_ser, -1, curr_cg)
     else: curr_cg, ma200_cg = 0.0, 0.0
 
-    # GSMI 评分引擎 (40/30/30)
+    # GSMI 评分引擎
     s_tips = 20 if curr_tips < 1.0 else (10 if curr_tips <= 2.0 else 0)
     s_dxy = 20 if curr_dxy < 100 else (10 if curr_dxy <= 105 else 0)
     s_cash = 30 if fms_cash > 5.0 else (15 if fms_cash >= 4.0 else 0)
@@ -112,15 +123,18 @@ try:
 
     c_score, c_radar = st.columns([2, 1])
     with c_score:
+        # 获取行情时间戳显示在标题上
+        market_time = dxy_ser.index[-1].strftime('%m-%d %H:%M')
         fig = go.Figure(go.Indicator(
             mode = "gauge+number", value = gsmi_total,
-            title = {'text': f"GSMI 环境总分 ({datetime.now().strftime('%m-%d')})", 'font': {'size': 20}},
+            title = {'text': f"GSMI 总分 (最后行情: {market_time})", 'font': {'size': 20}},
             gauge = {'axis': {'range': [0, 100]}, 'bar': {'color': "#00ffcc"},
                      'steps': [{'range': [0, 40], 'color': "#441111"}, {'range': [40, 60], 'color': "#444411"},
                                {'range': [60, 80], 'color': "#114411"}, {'range': [80, 100], 'color': "#006644"}]}
         ))
         fig.update_layout(height=350, margin=dict(l=30, r=30, t=50, b=20), paper_bgcolor="#0e1117", font={'color': "white"})
         st.plotly_chart(fig, use_container_width=True)
+
 
     with c_radar:
         st.subheader("🚨 战术预警灯")
@@ -216,3 +230,4 @@ except Exception as e:
 
 st.markdown("---")
 st.caption("GSMI 逻辑系统 | 40% 流动性 + 30% 情绪 + 30% 现实。数据仅供复盘参考。")
+
