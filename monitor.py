@@ -116,7 +116,7 @@ try:
     # Spread: 300bps (15分) -> 600bps (0分)
     s_spread = score_linear(curr_spread, 300, 600, 15, reverse=True)
 
-    # 铜金比趋势评分
+# 铜金比趋势评分
     if not copper_ser.empty and not gold_ser.empty:
         cg_ratio = (copper_ser / gold_ser).dropna()
         curr_cg = get_val(cg_ratio)
@@ -125,9 +125,14 @@ try:
         
         # 基础分：高于200MA得10分
         s_cg_base = 10 if curr_cg > ma200_cg else 0
-        # 动能分：近5日趋势向上得5分
-        prev_cg_avg = get_val(cg_ratio.iloc[-10:-5].mean()) if len(cg_ratio)>10 else curr_cg
-        s_cg_momo = 5 if curr_cg > prev_cg_avg else 0
+        
+        # 动能分：近5日均值对比（修正此处报错）
+        if len(cg_ratio) > 10:
+            prev_cg_avg = cg_ratio.iloc[-10:-5].mean() # 直接取均值，不再传给 get_val
+            s_cg_momo = 5 if curr_cg > prev_cg_avg else 0
+        else:
+            s_cg_momo = 0
+            
         s_cg = s_cg_base + s_cg_momo
     else:
         curr_cg, ma200_cg, s_cg = 0.0, 0.0, 0
@@ -228,3 +233,4 @@ except Exception as e:
 
 st.markdown("---")
 st.caption("GSMI 精密评分版 | 逻辑：25% TIPS + 20% DXY + 25% FMS + 15% Spread + 15% Copper/Gold。")
+
