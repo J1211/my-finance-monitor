@@ -28,38 +28,48 @@ fred = Fred(api_key=fred_key)
 
 # --- 3. 数据抓取函数 (改用 cot_reports) ---
 
-@st.cache_data(ttl=86400) # COT 每周更新一次，缓存设长一点（24小时）
+@st.cache_data(ttl=86400) # COT每周更新一次，缓存24小时
 def fetch_cot_data():
-    """从 CFTC 直接抓取历史 COT 数据，计算 20 年百分位"""
+    """修正后的 COT 数据抓取函数"""
     try:
-        # 抓取最近 20 年的数据（CFTC 数据量大，抓取可能较慢）
-        # 这里为了演示和速度，我们直接抓取过去几年的年度汇总
         current_year = datetime.now().year
         frames = []
-        # 抓取近 5 年数据用于显示趋势，百分位参考值我们设定为 20 年经验值
-        # 如果需要严格 20 年，可以循环从 current_year 往下减，但 Streamlit 可能会超时
-        for year in range(current_year - 4, current_year + 1):
-            df_year = cot.get_cot_year(year, cot_report_type='legacy_fut')
-            frames.append(df_year)
         
+        # 抓取近 3 年数据（减少下载量，提高加载速度）
+        for year in range(current_year - 2, current_year + 1):
+            # 修正函数名：从 get_cot_year 改为 cot_year
+            df_year = cot.cot_year(year, cot_report_type='legacy_fut')
+            if df_year is not None:
+                frames.append(df_year)
+        
+        if not frames:
+            return pd.Series(), pd.Series()
+
         all_cot = pd.concat(frames)
-        all_cot['As_of_Date_In_Form_YYMMDD'] = pd.to_datetime(all_cot['As_of_Date_In_Form_YYMMDD'], format='%y%m%d')
+        
+        # 转换日期格式
+        all_cot['As_of_Date_In_Form_YYMMDD'] = pd.to_datetime(
+            all_cot['As_of_Date_In_Form_YYMMDD'], format='%y%m%d', errors='coerce'
+        )
         all_cot.set_index('As_of_Date_In_Form_YYMMDD', inplace=True)
         all_cot.sort_index(inplace=True)
 
-        # 提取金和银
+        # 准确的资产名称（CFTC 标准格式）
         gold_name = "GOLD - COMMODITY EXCHANGE INC."
         silver_name = "SILVER - COMMODITY EXCHANGE INC."
         
-        def get_net_ser(asset_name):
-            asset_df = all_cot[all_cot['Market_and_Exchange_Names'] == asset_name]
+        def extract_net(asset_name):
+            # 筛选特定品种
+            asset_df = all_cot[all_cot['Market_and_Exchange_Names'].str.contains(asset_name, na=False, case=False)]
+            if asset_df.empty:
+                return pd.Series()
             # 计算净头寸 = 非商业多头 - 非商业空头
             net = asset_df['Noncommercial_Positions_Long_All'] - asset_df['Noncommercial_Positions_Short_All']
             return net
 
-        return get_net_ser(gold_name), get_net_ser(silver_name)
+        return extract_net("GOLD"), extract_net("SILVER")
     except Exception as e:
-        st.error(f"COT 数据抓取失败: {e}")
+        st.error(f"COT 数据解析失败: {e}")
         return pd.Series(), pd.Series()
 
 @st.cache_data(ttl=3600)
@@ -162,3 +172,4 @@ try:
 
 except Exception as e:
     st.error(f"全局错误: {e}")
+
