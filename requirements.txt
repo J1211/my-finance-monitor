@@ -4,4 +4,4 @@ pandas
 plotly
 fredapi
 akshare
-
+cot_reports
