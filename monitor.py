@@ -28,68 +28,7 @@ fred = Fred(api_key=fred_key)
 
 # --- 3. 数据抓取函数 (改用 cot_reports) ---
 
-@st.cache_data(ttl=86400)
-def fetch_cot_data():
-    """全自动感知的 COT 抓取函数，解决所有列名报错"""
-    try:
-        current_year = datetime.now().year
-        frames = []
-        
-        # 抓取最近 2 年的数据，保证加载速度
-        for year in range(current_year - 1, current_year + 1):
-            df_year = cot.cot_year(year, cot_report_type='legacy_fut')
-            if df_year is not None and not df_year.empty:
-                # 统一转为小写字符串
-                df_year.columns = [str(c).strip().lower() for c in df_year.columns]
-                frames.append(df_year)
-        
-        if not frames:
-            return pd.Series(), pd.Series()
 
-        all_cot = pd.concat(frames, ignore_index=True)
-
-        # --- 智能寻找关键列 ---
-        cols = all_cot.columns.tolist()
-        
-        # 1. 找日期列 (匹配包含 'date' 或 'yymmdd' 的列)
-        date_col = next((c for c in cols if 'date' in c or 'yymmdd' in c), None)
-        
-        # 2. 找品种名称列 (匹配包含 'market' 和 'exchange' 的列)
-        market_col = next((c for c in cols if 'market' in c and 'exchange' in c), 
-                          next((c for c in cols if 'market' in c), None))
-        
-        # 3. 找非商业多头/空头列 (Non-Commercial)
-        long_col = next((c for c in cols if 'noncommercial' in c and 'long' in c and 'all' in c), None)
-        short_col = next((c for c in cols if 'noncommercial' in c and 'short' in c and 'all' in c), None)
-
-        # 调试信息：如果找不到列，在页面显示具体拿到了什么列名
-        if not all([date_col, market_col, long_col, short_col]):
-            st.error(f"无法识别 COT 数据列名。当前获取到的列名为: {cols[:5]}...")
-            return pd.Series(), pd.Series()
-
-        # --- 数据清洗 ---
-        # 尝试两种可能的日期格式
-        all_cot[date_col] = pd.to_datetime(all_cot[date_col], errors='coerce', 
-                                           format='%y%m%d' if 'yymmdd' in date_col else None)
-        all_cot = all_cot.dropna(subset=[date_col])
-        all_cot.set_index(date_col, inplace=True)
-        all_cot.sort_index(inplace=True)
-
-        def extract_net(keyword):
-            mask = all_cot[market_col].str.contains(keyword, na=False, case=False)
-            asset_df = all_cot[mask]
-            if asset_df.empty:
-                return pd.Series()
-            # 确保是数值计算
-            net = pd.to_numeric(asset_df[long_col], errors='coerce') - \
-                  pd.to_numeric(asset_df[short_col], errors='coerce')
-            return net.dropna()
-
-        return extract_net("GOLD"), extract_net("SILVER")
-        
-    except Exception as e:
-        st.error(f"COT 抓取过程中发生错误: {e}")
-        return pd.Series(), pd.Series()
         
 @st.cache_data(ttl=3600)
 def fetch_macro_data():
@@ -191,6 +130,7 @@ try:
 
 except Exception as e:
     st.error(f"全局错误: {e}")
+
 
 
 
