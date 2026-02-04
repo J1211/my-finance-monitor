@@ -4,15 +4,23 @@ import pandas as pd
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
 from fredapi import Fred
-import cot_reports as cot  # 新增：无需 Key 抓取 COT 数据
 
-# --- 1. 界面配置 ---
-st.set_page_config(page_title="GSMI | 全球聪明钱监控面板", layout="wide")
+# --- 1. 界面配置与美化 ---
+st.set_page_config(page_title="GSMI | 精密宏观监控面板", layout="wide")
 
-# (此处保持你原来的 CSS 样式不变...)
+st.markdown("""
+    <style>
+    .main { background-color: #0e1117; }
+    div[data-testid="stMetricValue"] { font-size: 32px; font-weight: bold; color: #00ffcc; }
+    .standard-text { color: #aaa; font-size: 14px; margin-top: -10px; margin-bottom: 10px; font-weight: bold; }
+    </style>
+    """, unsafe_allow_html=True)
+
+st.title("🏹 GSMI 全球聪明钱精密监控面板")
 
 # --- 2. 侧边栏配置 ---
 st.sidebar.header("🛠️ 核心参数配置")
+
 if "fred_api_key" in st.secrets:
     fred_key = st.secrets["fred_api_key"]
 else:
@@ -24,12 +32,19 @@ if not fred_key:
 
 fred = Fred(api_key=fred_key)
 
-# (侧边栏其他调查参数保持不变...)
+st.sidebar.markdown("---")
+st.sidebar.header("🗳️ BofA FMS 机构调查 (月更)")
+fms_date = st.sidebar.date_input("调查发布日期", datetime.now() - timedelta(days=15))
+fms_cash = st.sidebar.slider("机构现金水平 (%)", 3.0, 6.5, 4.5, 0.1)
+fms_crowded = st.sidebar.selectbox("当前最拥挤交易", ["美股大盘科技", "做空中国股票", "做多美元", "做多国债", "其他/无"])
 
-# --- 3. 数据抓取函数 (改用 cot_reports) ---
+st.sidebar.markdown("---")
+st.sidebar.header("🎯 目标追踪")
+target_name = st.sidebar.text_input("关注板块名称", "中概科技龙头")
+target_status = st.sidebar.radio("该板块目前拥挤度", ["冷清/低配", "标配", "极其拥挤"])
 
+# --- 3. 数据抓取与辅助函数 ---
 
-        
 @st.cache_data(ttl=3600)
 def fetch_macro_data():
     end = datetime.now()
@@ -40,7 +55,8 @@ def fetch_macro_data():
             df = yf.download(ticker, start=start, end=end, progress=False)
             if df.empty: return pd.Series()
             data = df['Close'] if 'Close' in df.columns else df
-            if isinstance(data, pd.DataFrame): return data.iloc[:, 0].ffill().dropna()
+            if isinstance(data, pd.DataFrame):
+                return data.iloc[:, 0].ffill().dropna()
             return data.ffill().dropna()
         except: return pd.Series()
 
@@ -53,84 +69,162 @@ def fetch_macro_data():
     hsi = safe_get_yf("^HSI")
     as300 = safe_get_yf("000300.SS")
     
-    # 获取 COT 数据
-    gold_cot_ser, silver_cot_ser = fetch_cot_data()
-    
-    return tips, dxy, copper, gold, spread, hkd, hsi, as300, gold_cot_ser, silver_cot_ser
+    return tips, dxy, copper, gold, spread, hkd, hsi, as300
 
-# --- 4. 辅助函数 ---
 def get_val(ser, pos=-1, default=0.0):
     if ser is None or len(ser) == 0: return default
-    try: return float(ser.iloc[pos])
+    try:
+        return float(ser.iloc[pos])
     except: return default
 
-# 黄金 20 年极值参考 (根据历史数据：高点约 350k，低点约 0)
-# 白银 20 年极值参考 (高点约 100k，低点约 -20k)
-def get_percentile_fixed(val, asset="gold"):
-    if asset == "gold":
-        low, high = 0, 350000
-    else:
-        low, high = -20000, 100000
-    pct = (val - low) / (high - low) * 100
-    return max(0, min(100, pct))
+# --- 4. 核心评分引擎 (线性插值逻辑) ---
 
-# --- 5. 逻辑执行与 UI (重点修改 tabs[2]) ---
+def score_linear(val, min_val, max_val, max_score, reverse=False):
+    """
+    val: 当前值
+    min_val: 对应分数为 0 (或 100) 的边界
+    max_val: 对应分数为 100 (或 0) 的边界
+    max_score: 该项指标的总权重分
+    reverse: 如果为True，值越大分数越低
+    """
+    if not reverse:
+        score = (val - min_val) / (max_val - min_val) * max_score
+    else:
+        score = (max_val - val) / (max_val - min_val) * max_score
+    return max(0, min(max_score, score))
+
+# --- 5. 逻辑执行 ---
 
 try:
-    tips_ser, dxy_ser, copper_ser, gold_ser, spread_ser, hkd_ser, hsi_ser, as300_ser, g_cot, s_cot = fetch_macro_data()
+    tips_ser, dxy_ser, copper_ser, gold_ser, spread_ser, hkd_ser, hsi_ser, as300_ser = fetch_macro_data()
 
-    # (此处 GSMI 评分引擎代码保持不变...)
+    # 1. 流动性评分 (TIPS & DXY)
+    curr_tips = get_val(tips_ser)
+    # TIPS: 0.5% (25分) -> 2.5% (0分)
+    s_tips = score_linear(curr_tips, 0.5, 2.5, 25, reverse=True)
+    
+    curr_dxy = get_val(dxy_ser)
+    # DXY: 98 (20分) -> 108 (0分)
+    s_dxy = score_linear(curr_dxy, 98, 108, 20, reverse=True)
+
+    # 2. 情绪评分 (FMS Cash)
+    # Cash: 3.5% (0分) -> 6.0% (25分)
+    s_cash = score_linear(fms_cash, 3.5, 6.0, 25, reverse=False)
+
+    # 3. 现实评分 (Spread & Copper/Gold)
+    curr_spread = get_val(spread_ser)
+    # Spread: 300bps (15分) -> 600bps (0分)
+    s_spread = score_linear(curr_spread, 300, 600, 15, reverse=True)
+
+    # 铜金比趋势评分
+    if not copper_ser.empty and not gold_ser.empty:
+        cg_ratio = (copper_ser / gold_ser).dropna()
+        curr_cg = get_val(cg_ratio)
+        ma200_cg_ser = cg_ratio.rolling(200).mean().dropna()
+        ma200_cg = get_val(ma200_cg_ser, -1, curr_cg)
+        
+        # 基础分：高于200MA得10分
+        s_cg_base = 10 if curr_cg > ma200_cg else 0
+        # 动能分：近5日趋势向上得5分
+        prev_cg_avg = get_val(cg_ratio.iloc[-10:-5].mean()) if len(cg_ratio)>10 else curr_cg
+        s_cg_momo = 5 if curr_cg > prev_cg_avg else 0
+        s_cg = s_cg_base + s_cg_momo
+    else:
+        curr_cg, ma200_cg, s_cg = 0.0, 0.0, 0
+
+    gsmi_total = s_tips + s_dxy + s_cash + s_spread + s_cg
+
+    # --- 6. UI 展示 ---
+
+    c_score, c_radar = st.columns([2, 1])
+    with c_score:
+        market_time = dxy_ser.index[-1].strftime('%m-%d %H:%M')
+        fig = go.Figure(go.Indicator(
+            mode = "gauge+number", value = gsmi_total,
+            title = {'text': f"GSMI 精密总分 (最后行情: {market_time})", 'font': {'size': 20}},
+            gauge = {'axis': {'range': [0, 100]}, 'bar': {'color': "#00ffcc"},
+                     'steps': [{'range': [0, 40], 'color': "#441111"}, {'range': [40, 60], 'color': "#444411"},
+                               {'range': [60, 80], 'color': "#114411"}, {'range': [80, 100], 'color': "#006644"}]}
+        ))
+        fig.update_layout(height=350, margin=dict(l=30, r=30, t=50, b=20), paper_bgcolor="#0e1117", font={'color': "white"})
+        st.plotly_chart(fig, use_container_width=True)
+
+    with c_radar:
+        st.subheader("🚨 实时战术预警")
+        status_map = {"冷清/低配": "🟢 低位安全", "标配": "🟡 中性观望", "极其拥挤": "🔴 警惕踩踏"}
+        st.markdown(f"**关注目标: {target_name}**")
+        st.title(status_map[target_status])
+        st.warning(f"FMS 最拥挤交易: {fms_crowded}")
 
     st.markdown("---")
-    tabs = st.tabs(["💧 流动性", "🧠 情绪", "🏗️ 现实", "📉 执行确认"])
+    tabs = st.tabs(["💧 流动性 (45分)", "🧠 情绪 (25分)", "🏗️ 现实 (30分)", "📉 执行确认"])
+
+    with tabs[0]:
+        col1, col2 = st.columns(2)
+        with col1:
+            st.metric("10Y TIPS (实际利率)", f"{curr_tips:.2f}%", f"得分: {s_tips:.1f}/25")
+            st.markdown('<p class="standard-text">线性评分: 0.5%(满分) -> 2.5%(0分)</p>', unsafe_allow_html=True)
+            st.area_chart(tips_ser.tail(90), height=200)
+        with col2:
+            st.metric("美元指数 (DXY)", f"{curr_dxy:.2f}", f"得分: {s_dxy:.1f}/20")
+            st.markdown('<p class="standard-text">线性评分: 98(满分) -> 108(0分)</p>', unsafe_allow_html=True)
+            st.area_chart(dxy_ser.tail(90), height=200)
+
+    with tabs[1]:
+        m1, m2 = st.columns(2)
+        with m1:
+            st.metric("FMS 机构现金水平", f"{fms_cash}%", f"得分: {s_cash:.1f}/25")
+            st.markdown('<p class="standard-text">线性评分: 6.0%(满分) -> 3.5%(0分)</p>', unsafe_allow_html=True)
+        with m2: 
+            st.info(f"月更调查日期: {fms_date}\n\n当前市场情绪得分占比反映了机构‘潜在买入购买力’。")
 
     with tabs[2]:
-        col_r1, col_r2 = st.columns(2)
-        with col_r1:
-            st.metric("高收益债利差", f"{get_val(spread_ser):.0f} bps")
-        with col_r2:
-            cg_ratio = (copper_ser / gold_ser).dropna()
-            curr_cg = get_val(cg_ratio)
-            ma200_cg = get_val(cg_ratio.rolling(200).mean())
-            st.metric("铜金比趋势", f"{curr_cg:.4f}", "高于200MA" if curr_cg > ma200_cg else "低于200MA")
-
-        st.write("---")
-        st.subheader("🥇 贵金属大资金追踪 (COT Non-Commercial Net)")
+        r1, r2 = st.columns(2)
+        with r1:
+            st.metric("高收益债利差", f"{curr_spread:.0f} bps", f"得分: {s_spread:.1f}/15")
+            st.markdown('<p class="standard-text">线性评分: 300bps(满分) -> 600bps(0分)</p>', unsafe_allow_html=True)
+        with r2:
+            st.metric("铜金比趋势", f"{curr_cg:.4f}", f"得分: {s_cg:.1f}/15")
+            st.markdown('<p class="standard-text">规则: >200MA(10分) + 动能向上(5分)</p>', unsafe_allow_html=True)
         
-        if not g_cot.empty and not s_cot.empty:
-            c1, c2 = st.columns(2)
+        fig_cg = go.Figure()
+        fig_cg.add_trace(go.Scatter(x=cg_ratio.index[-120:], y=cg_ratio.values[-120:], name="铜金比", line=dict(color='#00ffcc')))
+        fig_cg.add_trace(go.Scatter(x=ma200_cg_ser.index[-120:], y=ma200_cg_ser.values[-120:], name="200MA", line=dict(dash='dash', color='white')))
+        fig_cg.update_layout(height=300, template="plotly_dark", margin=dict(l=10, r=10, t=10, b=10))
+        st.plotly_chart(fig_cg, use_container_width=True)
+
+    with tabs[3]:
+        # (保持原有的港股流动性与执行确认逻辑...)
+        st.subheader("🌉 港股与跨境流动性确认")
+        curr_hkd = get_val(hkd_ser)
+        e1, e2 = st.columns(2)
+        with e1:
+            fx_tag = "吸金" if curr_hkd < 7.78 else ("失血" if curr_hkd > 7.84 else "平稳")
+            st.metric("港元汇率 (USD/HKD)", f"{curr_hkd:.4f}", fx_tag)
+        
+        with e2:
+            hk_short_ratio = st.slider("手动录入：大市沽空比率 (%)", 5.0, 35.0, 16.5, 0.1)
+        
+        if not as300_ser.empty and not hsi_ser.empty:
+            comb = pd.concat([as300_ser, hsi_ser], axis=1).ffill().bfill().tail(20)
+            comb.columns = ["AS300", "HSI"]
+            norm = (comb / comb.iloc[0]) * 100
+            gap = float(norm["HSI"].iloc[-1] - norm["AS300"].iloc[-1])
             
-            # 黄金展示
-            with c1:
-                curr_g_cot = get_val(g_cot)
-                g_pct = get_percentile_fixed(curr_g_cot, "gold")
-                st.metric("黄金净头寸", f"{curr_g_cot/1000:.1f}k 手", f"估算20Y百分位: {g_pct:.1f}%")
-                
-                fig_g = go.Figure(go.Scatter(x=g_cot.index, y=g_cot.values, name="Gold Net", line=dict(color='#ffd700')))
-                fig_g.update_layout(height=250, template="plotly_dark", margin=dict(l=0, r=0, t=0, b=0))
-                st.plotly_chart(fig_g, use_container_width=True)
-                if g_pct > 85: st.error("🚨 黄金拥挤度极高，警惕回调")
-                elif g_pct < 15: st.success("✅ 黄金情绪极冷，具备反转潜力")
-
-            # 白银展示
-            with c2:
-                curr_s_cot = get_val(s_cot)
-                s_pct = get_percentile_fixed(curr_s_cot, "silver")
-                st.metric("白银净头寸", f"{curr_s_cot/1000:.1f}k 手", f"估算20Y百分位: {s_pct:.1f}%")
-                
-                fig_s = go.Figure(go.Scatter(x=s_cot.index, y=s_cot.values, name="Silver Net", line=dict(color='#c0c0c0')))
-                fig_s.update_layout(height=250, template="plotly_dark", margin=dict(l=0, r=0, t=0, b=0))
-                st.plotly_chart(fig_s, use_container_width=True)
-                if s_pct > 85: st.error("🚨 白银拥挤度极高")
-                elif s_pct < 15: st.success("✅ 白银情绪极冷")
-        else:
-            st.warning("COT 数据源链接中，请稍候或刷新...")
-
-    # (其他 Tabs 保持不变...)
+            st.write(f"📊 相对强度对比：近20日 HSI vs AS300 动能差: {gap:+.2f}%")
+            
+            # 自动决策建议
+            st.markdown("---")
+            st.subheader("🤖 GSMI 系统自动决策建议")
+            if gsmi_total >= 70:
+                st.success(f"✅ **环境极其安全** | 总分 {gsmi_total:.1f}。建议积极寻找买点。")
+            elif gsmi_total <= 40:
+                st.error(f"❌ **环境极其危险** | 总分 {gsmi_total:.1f}。建议空仓或对冲。")
+            else:
+                st.warning(f"⚖️ **环境中性磨底** | 总分 {gsmi_total:.1f}。轻仓博弈，等待趋势确认。")
 
 except Exception as e:
-    st.error(f"全局错误: {e}")
+    st.error(f"发生错误: {e}")
 
-
-
-
+st.markdown("---")
+st.caption("GSMI 精密评分版 | 逻辑：25% TIPS + 20% DXY + 25% FMS + 15% Spread + 15% Copper/Gold。")
