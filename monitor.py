@@ -208,6 +208,7 @@ try:
             st.metric("港元汇率 (USD/HKD)", f"{curr_hkd:.4f}", fx_tag)
         
         with e2:
+            st.markdown(f"🔍 [点击查看 AASTOCKS 大市沽空比率](http://www.aastocks.com/tc/stocks/market/shortselling/securities-eligible.aspx)")
             hk_short_ratio = st.slider("手动录入：大市沽空比率 (%)", 5.0, 35.0, 16.5, 0.1)
         
         if not as300_ser.empty and not hsi_ser.empty:
@@ -233,4 +234,5 @@ except Exception as e:
 
 st.markdown("---")
 st.caption("GSMI 精密评分版 | 逻辑：25% TIPS + 20% DXY + 25% FMS + 15% Spread + 15% Copper/Gold。")
+
 
