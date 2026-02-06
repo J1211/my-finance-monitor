@@ -43,7 +43,7 @@ st.sidebar.header("🎯 目标追踪")
 target_name = st.sidebar.text_input("关注板块名称", "中概科技龙头")
 target_status = st.sidebar.radio("该板块目前拥挤度", ["冷清/低配", "标配", "极其拥挤"])
 
-# --- 3. 数据抓取与辅助函数 ---
+# --- 3. 核心辅助函数 ---
 
 @st.cache_data(ttl=3600)
 def fetch_macro_data():
@@ -60,8 +60,12 @@ def fetch_macro_data():
             return data.ffill().dropna()
         except: return pd.Series()
 
-    tips = fred.get_series('DFII10', start, end).ffill().dropna()
-    spread = fred.get_series('BAMLH0A0HYM2', start, end).ffill().dropna()
+    try:
+        tips = fred.get_series('DFII10', start, end).ffill().dropna()
+        spread = fred.get_series('BAMLH0A0HYM2', start, end).ffill().dropna()
+    except:
+        tips, spread = pd.Series(), pd.Series()
+
     dxy = safe_get_yf("DX-Y.NYB")
     copper = safe_get_yf("HG=F")
     gold = safe_get_yf("GC=F")
@@ -71,22 +75,24 @@ def fetch_macro_data():
     
     return tips, dxy, copper, gold, spread, hkd, hsi, as300
 
-def get_val(ser, pos=-1, default=0.0):
-    if ser is None or len(ser) == 0: return default
-    try:
-        return float(ser.iloc[pos])
+def get_val(obj, pos=-1, default=0.0):
+    """
+    最安全的取值函数：解决 numpy.float64 has no len() 和空序列报错
+    """
+    if obj is None: return default
+    # 如果已经是数字类型，直接返回
+    if isinstance(obj, (int, float)): return float(obj)
+    # 如果是 Series
+    if isinstance(obj, pd.Series):
+        if obj.empty: return default
+        try: return float(obj.iloc[pos])
+        except: return default
+    # 如果是其他类型尝试强制转换
+    try: return float(obj)
     except: return default
 
-# --- 4. 核心评分引擎 (线性插值逻辑) ---
-
 def score_linear(val, min_val, max_val, max_score, reverse=False):
-    """
-    val: 当前值
-    min_val: 对应分数为 0 (或 100) 的边界
-    max_val: 对应分数为 100 (或 0) 的边界
-    max_score: 该项指标的总权重分
-    reverse: 如果为True，值越大分数越低
-    """
+    """线性插值评分逻辑"""
     if not reverse:
         score = (val - min_val) / (max_val - min_val) * max_score
     else:
@@ -96,43 +102,41 @@ def score_linear(val, min_val, max_val, max_score, reverse=False):
 # --- 5. 逻辑执行 ---
 
 try:
+    # 抓取数据
     tips_ser, dxy_ser, copper_ser, gold_ser, spread_ser, hkd_ser, hsi_ser, as300_ser = fetch_macro_data()
 
-    # 1. 流动性评分 (TIPS & DXY)
+    # --- 关键：防崩溃预检 ---
+    if tips_ser.empty or dxy_ser.empty:
+        st.error("❌ 核心数据(TIPS/DXY)获取失败，请检查 FRED API Key 或网络。")
+        st.stop()
+
+    # 1. 评分计算
     curr_tips = get_val(tips_ser)
-    # TIPS: 0.5% (25分) -> 2.5% (0分)
     s_tips = score_linear(curr_tips, 0.5, 2.5, 25, reverse=True)
     
     curr_dxy = get_val(dxy_ser)
-    # DXY: 98 (20分) -> 108 (0分)
     s_dxy = score_linear(curr_dxy, 98, 108, 20, reverse=True)
 
-    # 2. 情绪评分 (FMS Cash)
-    # Cash: 3.5% (0分) -> 6.0% (25分)
     s_cash = score_linear(fms_cash, 3.5, 6.0, 25, reverse=False)
 
-    # 3. 现实评分 (Spread & Copper/Gold)
     curr_spread = get_val(spread_ser)
-    # Spread: 300bps (15分) -> 600bps (0分)
     s_spread = score_linear(curr_spread, 300, 600, 15, reverse=True)
 
-# 铜金比趋势评分
+    # 铜金比趋势评分逻辑
     if not copper_ser.empty and not gold_ser.empty:
         cg_ratio = (copper_ser / gold_ser).dropna()
         curr_cg = get_val(cg_ratio)
         ma200_cg_ser = cg_ratio.rolling(200).mean().dropna()
         ma200_cg = get_val(ma200_cg_ser, -1, curr_cg)
         
-        # 基础分：高于200MA得10分
         s_cg_base = 10 if curr_cg > ma200_cg else 0
         
-        # 动能分：近5日均值对比（修正此处报错）
+        # 动能分：对比近5日均值 (此处修正 numpy.float64 len 报错)
         if len(cg_ratio) > 10:
-            prev_cg_avg = cg_ratio.iloc[-10:-5].mean() # 直接取均值，不再传给 get_val
+            prev_cg_avg = float(cg_ratio.iloc[-10:-5].mean())
             s_cg_momo = 5 if curr_cg > prev_cg_avg else 0
         else:
             s_cg_momo = 0
-            
         s_cg = s_cg_base + s_cg_momo
     else:
         curr_cg, ma200_cg, s_cg = 0.0, 0.0, 0
@@ -141,8 +145,19 @@ try:
 
     # --- 6. UI 展示 ---
 
+    # 顶部日期检查
+    with st.expander("📅 查看各数据源最后更新时间"):
+        col_t1, col_t2, col_t3 = st.columns(3)
+        t_tips = tips_ser.index[-1].strftime('%Y-%m-%d') if not tips_ser.empty else "N/A"
+        t_dxy = dxy_ser.index[-1].strftime('%Y-%m-%d') if not dxy_ser.empty else "N/A"
+        t_as300 = as300_ser.index[-1].strftime('%Y-%m-%d') if not as300_ser.empty else "N/A"
+        col_t1.write(f"FRED (利率): {t_tips}")
+        col_t2.write(f"DXY (美元): {t_dxy}")
+        col_t3.write(f"Asia (亚洲): {t_as300}")
+
     c_score, c_radar = st.columns([2, 1])
     with c_score:
+        # 获取行情时间戳显示在标题上
         market_time = dxy_ser.index[-1].strftime('%m-%d %H:%M')
         fig = go.Figure(go.Indicator(
             mode = "gauge+number", value = gsmi_total,
@@ -169,11 +184,11 @@ try:
         with col1:
             st.metric("10Y TIPS (实际利率)", f"{curr_tips:.2f}%", f"得分: {s_tips:.1f}/25")
             st.markdown('<p class="standard-text">线性评分: 0.5%(满分) -> 2.5%(0分)</p>', unsafe_allow_html=True)
-            st.area_chart(tips_ser.tail(90), height=200)
+            if not tips_ser.empty: st.area_chart(tips_ser.tail(90), height=200)
         with col2:
             st.metric("美元指数 (DXY)", f"{curr_dxy:.2f}", f"得分: {s_dxy:.1f}/20")
             st.markdown('<p class="standard-text">线性评分: 98(满分) -> 108(0分)</p>', unsafe_allow_html=True)
-            st.area_chart(dxy_ser.tail(90), height=200)
+            if not dxy_ser.empty: st.area_chart(dxy_ser.tail(90), height=200)
 
     with tabs[1]:
         m1, m2 = st.columns(2)
@@ -192,14 +207,14 @@ try:
             st.metric("铜金比趋势", f"{curr_cg:.4f}", f"得分: {s_cg:.1f}/15")
             st.markdown('<p class="standard-text">规则: >200MA(10分) + 动能向上(5分)</p>', unsafe_allow_html=True)
         
-        fig_cg = go.Figure()
-        fig_cg.add_trace(go.Scatter(x=cg_ratio.index[-120:], y=cg_ratio.values[-120:], name="铜金比", line=dict(color='#00ffcc')))
-        fig_cg.add_trace(go.Scatter(x=ma200_cg_ser.index[-120:], y=ma200_cg_ser.values[-120:], name="200MA", line=dict(dash='dash', color='white')))
-        fig_cg.update_layout(height=300, template="plotly_dark", margin=dict(l=10, r=10, t=10, b=10))
-        st.plotly_chart(fig_cg, use_container_width=True)
+        if not copper_ser.empty and not gold_ser.empty:
+            fig_cg = go.Figure()
+            fig_cg.add_trace(go.Scatter(x=cg_ratio.index[-120:], y=cg_ratio.values[-120:], name="铜金比", line=dict(color='#00ffcc')))
+            fig_cg.add_trace(go.Scatter(x=ma200_cg_ser.index[-120:], y=ma200_cg_ser.values[-120:], name="200MA", line=dict(dash='dash', color='white')))
+            fig_cg.update_layout(height=300, template="plotly_dark", margin=dict(l=10, r=10, t=10, b=10))
+            st.plotly_chart(fig_cg, use_container_width=True)
 
     with tabs[3]:
-        # (保持原有的港股流动性与执行确认逻辑...)
         st.subheader("🌉 港股与跨境流动性确认")
         curr_hkd = get_val(hkd_ser)
         e1, e2 = st.columns(2)
@@ -230,9 +245,7 @@ try:
                 st.warning(f"⚖️ **环境中性磨底** | 总分 {gsmi_total:.1f}。轻仓博弈，等待趋势确认。")
 
 except Exception as e:
-    st.error(f"发生错误: {e}")
+    st.error(f"系统运行中发生错误: {e}")
 
 st.markdown("---")
 st.caption("GSMI 精密评分版 | 逻辑：25% TIPS + 20% DXY + 25% FMS + 15% Spread + 15% Copper/Gold。")
-
-
