@@ -227,6 +227,7 @@ try:
         st.subheader("🌉 跨境流动性确认")
         hkd_val = get_val(hkd_ser)
         st.metric("港元汇率 (USD/HKD)", f"{hkd_val:.4f}", "吸金" if hkd_val < 7.80 else "失血")
+        st.markdown(f"🔍 [点击查看 信贷脉冲指数](https://www.macromicro.me/collections/31/cn-finance-relative/35559/china-credit-impulse-index)")
         if not as300_ser.empty and not hsi_ser.empty:
             norm = (pd.concat([as300_ser, hsi_ser], axis=1).tail(20)).apply(lambda x: x/x.iloc[0]*100)
             st.write(f"📊 HSI vs AS300 动能差: {float(norm.iloc[-1,1]-norm.iloc[-1,0]):+.2f}%")
@@ -240,3 +241,4 @@ except Exception as e:
     st.error(f"运行出错: {e}")
 
 st.caption("GSMI Tactical | 核心计分：NetLiquidity(25) + TIPS(20) + DXY(15) + FMS(15) + CuAu(15) + Spread(10)")
+
