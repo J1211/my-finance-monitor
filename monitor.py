@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 from fredapi import Fred
 
 # --- 1. 界面配置与美化 ---
-st.set_page_config(page_title="GSMI | 精密宏观监控面板", layout="wide")
+st.set_page_config(page_title="GSMI | 全球宏观精密监控", layout="wide")
 
 st.markdown("""
     <style>
@@ -47,6 +47,7 @@ target_status = st.sidebar.radio("该板块目前拥挤度", ["冷清/低配", "
 
 @st.cache_data(ttl=3600)
 def fetch_macro_data():
+    """抓取常规宏观数据"""
     end = datetime.now()
     start = end - timedelta(days=450)
     
@@ -75,42 +76,58 @@ def fetch_macro_data():
     
     return tips, dxy, copper, gold, spread, hkd, hsi, as300
 
+@st.cache_data(ttl=3600)
+def fetch_fed_liquidity():
+    """抓取美联储资产负债表与净流动性数据"""
+    end = datetime.now()
+    start = end - timedelta(days=500)
+    try:
+        # 1. 总资产 (WALCL) 2. TGA账户 (WTREGEN) 3. 逆回购 (RRPONTSYD)
+        assets = fred.get_series('WALCL', start, end)
+        tga = fred.get_series('WTREGEN', start, end)
+        rrp = fred.get_series('RRPONTSYD', start, end)
+        
+        df = pd.concat([assets, tga, rrp], axis=1)
+        df.columns = ['assets', 'tga', 'rrp']
+        df = df.ffill().dropna()
+        
+        # 计算净流动性 (万亿美元)
+        df['net_liquidity'] = (df['assets'] - df['tga'] - df['rrp']) / 1000000
+        df['assets_t'] = df['assets'] / 1000000
+        return df
+    except:
+        return pd.DataFrame()
+
 def get_val(obj, pos=-1, default=0.0):
-    """
-    最安全的取值函数：解决 numpy.float64 has no len() 和空序列报错
-    """
     if obj is None: return default
-    # 如果已经是数字类型，直接返回
     if isinstance(obj, (int, float)): return float(obj)
-    # 如果是 Series
     if isinstance(obj, pd.Series):
         if obj.empty: return default
         try: return float(obj.iloc[pos])
         except: return default
-    # 如果是其他类型尝试强制转换
     try: return float(obj)
     except: return default
 
 def score_linear(val, min_val, max_val, max_score, reverse=False):
-    """线性插值评分逻辑"""
     if not reverse:
         score = (val - min_val) / (max_val - min_val) * max_score
     else:
         score = (max_val - val) / (max_val - min_val) * max_score
     return max(0, min(max_score, score))
 
-# --- 5. 逻辑执行 ---
+# --- 4. 逻辑执行 ---
 
 try:
-    # 抓取数据
+    # 抓取所有数据
     tips_ser, dxy_ser, copper_ser, gold_ser, spread_ser, hkd_ser, hsi_ser, as300_ser = fetch_macro_data()
+    df_fed = fetch_fed_liquidity()
 
-    # --- 关键：防崩溃预检 ---
+    # 数据预检
     if tips_ser.empty or dxy_ser.empty:
-        st.error("❌ 核心数据(TIPS/DXY)获取失败，请检查 FRED API Key 或网络。")
+        st.error("❌ 核心流动性数据抓取失败。请检查侧边栏 FRED API Key 是否正确。")
         st.stop()
 
-    # 1. 评分计算
+    # 1. 精密评分引擎
     curr_tips = get_val(tips_ser)
     s_tips = score_linear(curr_tips, 0.5, 2.5, 25, reverse=True)
     
@@ -122,46 +139,39 @@ try:
     curr_spread = get_val(spread_ser)
     s_spread = score_linear(curr_spread, 300, 600, 15, reverse=True)
 
-    # 铜金比趋势评分逻辑
     if not copper_ser.empty and not gold_ser.empty:
         cg_ratio = (copper_ser / gold_ser).dropna()
         curr_cg = get_val(cg_ratio)
         ma200_cg_ser = cg_ratio.rolling(200).mean().dropna()
         ma200_cg = get_val(ma200_cg_ser, -1, curr_cg)
-        
         s_cg_base = 10 if curr_cg > ma200_cg else 0
-        
-        # 动能分：对比近5日均值 (此处修正 numpy.float64 len 报错)
         if len(cg_ratio) > 10:
             prev_cg_avg = float(cg_ratio.iloc[-10:-5].mean())
             s_cg_momo = 5 if curr_cg > prev_cg_avg else 0
-        else:
-            s_cg_momo = 0
+        else: s_cg_momo = 0
         s_cg = s_cg_base + s_cg_momo
-    else:
-        curr_cg, ma200_cg, s_cg = 0.0, 0.0, 0
+    else: curr_cg, ma200_cg, s_cg = 0.0, 0.0, 0
 
     gsmi_total = s_tips + s_dxy + s_cash + s_spread + s_cg
 
-    # --- 6. UI 展示 ---
+    # --- 5. UI 展示 ---
 
-    # 顶部日期检查
+    # 数据更新时间检查
     with st.expander("📅 查看各数据源最后更新时间"):
         col_t1, col_t2, col_t3 = st.columns(3)
-        t_tips = tips_ser.index[-1].strftime('%Y-%m-%d') if not tips_ser.empty else "N/A"
-        t_dxy = dxy_ser.index[-1].strftime('%Y-%m-%d') if not dxy_ser.empty else "N/A"
+        t_tips = tips_ser.index[-1].strftime('%Y-%m-%d')
+        t_fed = df_fed.index[-1].strftime('%Y-%m-%d') if not df_fed.empty else "N/A"
         t_as300 = as300_ser.index[-1].strftime('%Y-%m-%d') if not as300_ser.empty else "N/A"
         col_t1.write(f"FRED (利率): {t_tips}")
-        col_t2.write(f"DXY (美元): {t_dxy}")
-        col_t3.write(f"Asia (亚洲): {t_as300}")
+        col_t2.write(f"美联储资产: {t_fed}")
+        col_t3.write(f"亚洲市场: {t_as300}")
 
     c_score, c_radar = st.columns([2, 1])
     with c_score:
-        # 获取行情时间戳显示在标题上
         market_time = dxy_ser.index[-1].strftime('%m-%d %H:%M')
         fig = go.Figure(go.Indicator(
             mode = "gauge+number", value = gsmi_total,
-            title = {'text': f"GSMI 精密总分 (最后行情: {market_time})", 'font': {'size': 20}},
+            title = {'text': f"GSMI 精密总分 (行情: {market_time})", 'font': {'size': 20}},
             gauge = {'axis': {'range': [0, 100]}, 'bar': {'color': "#00ffcc"},
                      'steps': [{'range': [0, 40], 'color': "#441111"}, {'range': [40, 60], 'color': "#444411"},
                                {'range': [60, 80], 'color': "#114411"}, {'range': [80, 100], 'color': "#006644"}]}
@@ -177,18 +187,39 @@ try:
         st.warning(f"FMS 最拥挤交易: {fms_crowded}")
 
     st.markdown("---")
-    tabs = st.tabs(["💧 流动性 (45分)", "🧠 情绪 (25分)", "🏗️ 现实 (30分)", "📉 执行确认"])
+    tabs = st.tabs(["💧 流动性水源", "🧠 情绪/购买力", "🏗️ 经济/现实", "📉 执行确认"])
 
     with tabs[0]:
+        st.subheader("🏦 美联储缩表 (QT) 与净流动性")
+        if not df_fed.empty:
+            m1, m2, m3 = st.columns(3)
+            curr_a = df_fed['assets_t'].iloc[-1]
+            prev_a = df_fed['assets_t'].iloc[-8] if len(df_fed)>8 else curr_a
+            curr_nl = df_fed['net_liquidity'].iloc[-1]
+            prev_nl = df_fed['net_liquidity'].iloc[-8] if len(df_fed)>8 else curr_nl
+            
+            m1.metric("美联储总资产", f"${curr_a:.2f}T", f"{curr_a-prev_a:+.3f}T (周)")
+            m2.metric("净流动性", f"${curr_nl:.2f}T", f"{curr_nl-prev_nl:+.3f}T (周)")
+            m3.metric("逆回购 (RRP)", f"${df_fed['rrp'].iloc[-1]/1000000:.2f}T", "流动性缓冲器")
+
+            fig_fed = go.Figure()
+            fig_fed.add_trace(go.Scatter(x=df_fed.index, y=df_fed['assets_t'], name="总资产 (QT)", line=dict(color='#666', dash='dash')))
+            fig_fed.add_trace(go.Scatter(x=df_fed.index, y=df_fed['net_liquidity'], name="净流动性 (核心)", line=dict(color='#00ffcc', width=3), yaxis="y2"))
+            fig_fed.update_layout(height=350, template="plotly_dark", hovermode="x unified",
+                                  legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                                  yaxis=dict(title="总资产 (万亿)", side="left"),
+                                  yaxis2=dict(title="净流动性 (万亿)", side="right", overlaying="y", showgrid=False),
+                                  margin=dict(l=10, r=10, t=30, b=10))
+            st.plotly_chart(fig_fed, use_container_width=True)
+        
+        st.write("---")
         col1, col2 = st.columns(2)
         with col1:
             st.metric("10Y TIPS (实际利率)", f"{curr_tips:.2f}%", f"得分: {s_tips:.1f}/25")
-            st.markdown('<p class="standard-text">线性评分: 0.5%(满分) -> 2.5%(0分)</p>', unsafe_allow_html=True)
-            if not tips_ser.empty: st.area_chart(tips_ser.tail(90), height=200)
+            st.area_chart(tips_ser.tail(90), height=200)
         with col2:
             st.metric("美元指数 (DXY)", f"{curr_dxy:.2f}", f"得分: {s_dxy:.1f}/20")
-            st.markdown('<p class="standard-text">线性评分: 98(满分) -> 108(0分)</p>', unsafe_allow_html=True)
-            if not dxy_ser.empty: st.area_chart(dxy_ser.tail(90), height=200)
+            st.area_chart(dxy_ser.tail(90), height=200)
 
     with tabs[1]:
         m1, m2 = st.columns(2)
@@ -196,18 +227,16 @@ try:
             st.metric("FMS 机构现金水平", f"{fms_cash}%", f"得分: {s_cash:.1f}/25")
             st.markdown('<p class="standard-text">线性评分: 6.0%(满分) -> 3.5%(0分)</p>', unsafe_allow_html=True)
         with m2: 
-            st.info(f"月更调查日期: {fms_date}\n\n当前市场情绪得分占比反映了机构‘潜在买入购买力’。")
+            st.info(f"月更调查日期: {fms_date}\n\n现金水平越高，代表机构‘潜在买入购买力’越强。")
 
     with tabs[2]:
         r1, r2 = st.columns(2)
         with r1:
             st.metric("高收益债利差", f"{curr_spread:.0f} bps", f"得分: {s_spread:.1f}/15")
-            st.markdown('<p class="standard-text">线性评分: 300bps(满分) -> 600bps(0分)</p>', unsafe_allow_html=True)
         with r2:
             st.metric("铜金比趋势", f"{curr_cg:.4f}", f"得分: {s_cg:.1f}/15")
-            st.markdown('<p class="standard-text">规则: >200MA(10分) + 动能向上(5分)</p>', unsafe_allow_html=True)
         
-        if not copper_ser.empty and not gold_ser.empty:
+        if not copper_ser.empty:
             fig_cg = go.Figure()
             fig_cg.add_trace(go.Scatter(x=cg_ratio.index[-120:], y=cg_ratio.values[-120:], name="铜金比", line=dict(color='#00ffcc')))
             fig_cg.add_trace(go.Scatter(x=ma200_cg_ser.index[-120:], y=ma200_cg_ser.values[-120:], name="200MA", line=dict(dash='dash', color='white')))
@@ -221,9 +250,7 @@ try:
         with e1:
             fx_tag = "吸金" if curr_hkd < 7.78 else ("失血" if curr_hkd > 7.84 else "平稳")
             st.metric("港元汇率 (USD/HKD)", f"{curr_hkd:.4f}", fx_tag)
-        
         with e2:
-            st.markdown(f"🔍 [点击查看 AASTOCKS 大市沽空比率](http://www.aastocks.com/tc/stocks/market/shortselling/securities-eligible.aspx)")
             hk_short_ratio = st.slider("手动录入：大市沽空比率 (%)", 5.0, 35.0, 16.5, 0.1)
         
         if not as300_ser.empty and not hsi_ser.empty:
@@ -231,21 +258,16 @@ try:
             comb.columns = ["AS300", "HSI"]
             norm = (comb / comb.iloc[0]) * 100
             gap = float(norm["HSI"].iloc[-1] - norm["AS300"].iloc[-1])
+            st.write(f"📊 相对强度：近20日 HSI vs AS300 动能差: {gap:+.2f}%")
             
-            st.write(f"📊 相对强度对比：近20日 HSI vs AS300 动能差: {gap:+.2f}%")
-            
-            # 自动决策建议
             st.markdown("---")
             st.subheader("🤖 GSMI 系统自动决策建议")
-            if gsmi_total >= 70:
-                st.success(f"✅ **环境极其安全** | 总分 {gsmi_total:.1f}。建议积极寻找买点。")
-            elif gsmi_total <= 40:
-                st.error(f"❌ **环境极其危险** | 总分 {gsmi_total:.1f}。建议空仓或对冲。")
-            else:
-                st.warning(f"⚖️ **环境中性磨底** | 总分 {gsmi_total:.1f}。轻仓博弈，等待趋势确认。")
+            if gsmi_total >= 70: st.success(f"✅ **环境安全** | 总分 {gsmi_total:.1f}。建议积极寻找买点。")
+            elif gsmi_total <= 40: st.error(f"❌ **环境危险** | 总分 {gsmi_total:.1f}。注意防御。")
+            else: st.warning(f"⚖️ **环境中性磨底** | 总分 {gsmi_total:.1f}。轻仓等待确认。")
 
 except Exception as e:
-    st.error(f"系统运行中发生错误: {e}")
+    st.error(f"系统运行错误: {e}")
 
 st.markdown("---")
-st.caption("GSMI 精密评分版 | 逻辑：25% TIPS + 20% DXY + 25% FMS + 15% Spread + 15% Copper/Gold。")
+st.caption("GSMI 精密评分版 | 数据源: FRED, yfinance. (Fed Assets 每周四更新)")
