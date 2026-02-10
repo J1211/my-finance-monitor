@@ -182,10 +182,10 @@ try:
         st.subheader("🏦 核心流动性 (NL + TIPS + DXY)")
         # NL 四象限简洁说明
         q1, q2, q3, q4 = st.columns(4)
-        q1.markdown('<div class="quadrant-box">🔵 <b>25分: 扩张期</b> (水位高+放水中) 🚀 进攻</div>', unsafe_allow_html=True)
-        q2.markdown('<div class="quadrant-box">🟡 <b>15分: 滞涨期</b> (水位高+放水慢) ⚠️ 警惕</div>', unsafe_allow_html=True)
-        q3.markdown('<div class="quadrant-box">🟠 <b>10分: 修复期</b> (水位低+放水启) 🔍 观察</div>', unsafe_allow_html=True)
-        q4.markdown('<div class="quadrant-box">🔴 <b>0分: 衰退期</b> (水位低+漏水中) 🛑 空仓</div>', unsafe_allow_html=True)
+        q1.markdown('<div class="quadrant-box">🔵 <b>25分: NL扩张期</b> (水位高+放水中) 🚀 进攻</div>', unsafe_allow_html=True)
+        q2.markdown('<div class="quadrant-box">🟡 <b>15分: NL滞涨期</b> (水位高+放水慢) ⚠️ 警惕</div>', unsafe_allow_html=True)
+        q3.markdown('<div class="quadrant-box">🟠 <b>10分: NL修复期</b> (水位低+放水启) 🔍 观察</div>', unsafe_allow_html=True)
+        q4.markdown('<div class="quadrant-box">🔴 <b>0分: NL衰退期</b> (水位低+漏水中) 🛑 空仓</div>', unsafe_allow_html=True)
 
         m1, m2, m3 = st.columns(3)
         m1.metric("净流动性 (NL)", f"${curr_nl:.2f}T", f"评分: {s_nl}/25")
@@ -229,7 +229,10 @@ try:
             hkd_val = get_val(hkd_ser)
             st.metric("港元汇率 (USD/HKD)", f"{hkd_val:.4f}", "吸金" if hkd_val < 7.80 else "失血")
         with hk2:
+            st.markdown(f"🔍 [点击查看 AASTOCKS 港股大市沽空比率](http://www.aastocks.com/tc/stocks/market/shortselling/securities-eligible.aspx)")
             hk_short = st.slider("手动录入：大市沽空比率 (%)", 5.0, 35.0, 16.5, 0.1)
+
+            st.markdown(f"🔍 [点击查看 中国信贷脉冲指数](https://www.macromicro.me/collections/31/cn-finance-relative/35559/china-credit-impulse-index)")
 
         if not as300_ser.empty and not hsi_ser.empty:
             norm = (pd.concat([as300_ser, hsi_ser], axis=1).tail(20)).apply(lambda x: x/x.iloc[0]*100)
@@ -244,3 +247,4 @@ except Exception as e:
     st.error(f"系统错误: {e}")
 
 st.caption("GSMI Tactical | 数据源: FRED, yfinance. (Fed Assets 周期性延迟同步)")
+
