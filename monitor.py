@@ -119,18 +119,19 @@ def calculate_history(df, fms_val):
             gsmi_history.append(np.nan)
             continue
         
-        # 1. NL (25)
+        # 1. NL (25分)
         s_nl = (15 if df['nl'].iloc[i] > nl_ma4.iloc[i] else 0) + (10 if df['nl'].iloc[i] > df['nl'].iloc[i-5] else 0)
-        # 2. TIPS (20)
+        # 2. TIPS (20分)
         s_tips = score_linear(df['tips'].iloc[i], 0.5, 2.5, 20, reverse=True)
-        # 3. DXY (15)
+        # 3. DXY (15分)
         s_dxy = score_linear(df['dxy'].iloc[i], 98, 108, 15, reverse=True)
-        # 4. FMS (15)
+        # 4. FMS (15分)
         s_cash = score_linear(fms_val, 3.5, 6.0, 15, reverse=False)
-        # 5. CG (15)
-        s_cg = (10 if df['cg_ratio'].iloc[i] > cg_ma200.iloc[i] else 0) if i > 200 else 0
-        s_cg += 5 if df['cg_ratio'].iloc[i] > df['cg_ratio'].iloc[i-10:i-5].mean() else 0
-        # 6. Spread (10)
+        # 5. CG (15分)
+        s_cg_base = (10 if df['cg_ratio'].iloc[i] > cg_ma200.iloc[i] else 0) if i > 200 else 0
+        s_cg_momo = 5 if df['cg_ratio'].iloc[i] > df['cg_ratio'].iloc[i-10:i-5].mean() else 0
+        s_cg = s_cg_base + s_cg_momo
+        # 6. Spread (10分)
         s_spread = score_linear(df['spread'].iloc[i], 300, 600, 10, reverse=True)
         
         gsmi_history.append(s_nl + s_tips + s_dxy + s_cash + s_cg + s_spread)
@@ -145,6 +146,13 @@ try:
     df = calculate_history(df_raw, fms_cash)
     latest = df.iloc[-1]
     gsmi_total = latest['gsmi_score']
+
+    # 计算最新单项得分用于显示
+    nl_ma4_last = df['nl'].rolling(20).mean().iloc[-1]
+    s_nl_latest = (15 if latest['nl'] > nl_ma4_last else 0) + (10 if latest['nl'] > df['nl'].iloc[-6] else 0)
+    
+    cg_ma200_last = df['cg_ratio'].rolling(200).mean().iloc[-1]
+    s_cg_latest = (10 if latest['cg_ratio'] > cg_ma200_last else 0) + (5 if latest['cg_ratio'] > df['cg_ratio'].iloc[-10:-5].mean() else 0)
 
     # --- 5. UI 展示 ---
     c1, c2 = st.columns([2, 1])
@@ -172,13 +180,13 @@ try:
     with tabs[0]:
         st.subheader("🏦 核心流动性水源 (NL + TIPS + DXY)")
         q1, q2, q3, q4 = st.columns(4)
-        q1.markdown('<div class="quadrant-box">🔵 <b>25分: NL扩张期</b><br>(水位高+放水中) 🚀 进攻</div>', unsafe_allow_html=True)
-        q2.markdown('<div class="quadrant-box">🟡 <b>15分: NL滞涨期</b><br>(水位高+放水慢) ⚠️ 警惕</div>', unsafe_allow_html=True)
-        q3.markdown('<div class="quadrant-box">🟠 <b>10分: NL修复期</b><br>(水位低+放水启) 🔍 观察</div>', unsafe_allow_html=True)
-        q4.markdown('<div class="quadrant-box">🔴 <b>0分: NL衰退期</b><br>(水位低+漏水中) 🛑 空仓</div>', unsafe_allow_html=True)
+        q1.markdown('<div class="quadrant-box">🔵 <b>25分: NL扩张期</b>🚀 进攻</div>', unsafe_allow_html=True)
+        q2.markdown('<div class="quadrant-box">🟡 <b>15分: NL滞涨期</b>⚠️ 警惕</div>', unsafe_allow_html=True)
+        q3.markdown('<div class="quadrant-box">🟠 <b>10分: NL修复期</b>🔍 观察</div>', unsafe_allow_html=True)
+        q4.markdown('<div class="quadrant-box">🔴 <b>0分: NL衰退期</b>🛑 空仓</div>', unsafe_allow_html=True)
 
         m1, m2, m3 = st.columns(3)
-        m1.metric("净流动性 (NL)", f"${latest['nl']:.2f}T", f"周变: {latest['nl'] - df['nl'].iloc[-6]:+.3f}T")
+        m1.metric("净流动性 (NL)", f"${latest['nl']:.2f}T", f"评分: {s_nl_latest}/25")
         m2.metric("10Y TIPS (实际利率)", f"{latest['tips']:.2f}%", f"评分: {score_linear(latest['tips'],0.5,2.5,20,True):.1f}/20")
         m3.metric("美元指数 (DXY)", f"{latest['dxy']:.2f}", f"评分: {score_linear(latest['dxy'],98,108,15,True):.1f}/15")
         
@@ -202,7 +210,7 @@ try:
         st.subheader("🏗️ 现实增长与信用防线")
         r1, r2 = st.columns(2)
         with r1:
-            st.metric("铜金比趋势", f"{latest['cg_ratio']:.4f}", "高于200MA" if latest['cg_ratio'] > df['cg_ratio'].rolling(200).mean().iloc[-1] else "低于200MA")
+            st.metric("铜金比趋势", f"{latest['cg_ratio']:.4f}", f"得分: {s_cg_latest}/15")
             st.area_chart(df['cg_ratio'].tail(120), height=200)
         with r2:
             st.metric("高收益债利差", f"{latest['spread']:.0f} bps", f"得分: {score_linear(latest['spread'],300,600,10,True):.1f}/10")
