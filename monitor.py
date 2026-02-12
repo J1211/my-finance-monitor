@@ -216,35 +216,35 @@ try:
         st.subheader("🏗️ 现实增长与信用防线")
      
         # 获取纳斯达克 100 数据进行验证
-@st.cache_data(ttl=3600)
-def fetch_verification_data():
-    end = datetime.now()
-    start = end - timedelta(days=200)
-    ndx = yf.download("QQQ", start=start, end=end, progress=False)['Close']
-    return ndx
+        @st.cache_data(ttl=3600)
+        def fetch_verification_data():
+            end = datetime.now()
+            start = end - timedelta(days=200)
+            ndx = yf.download("QQQ", start=start, end=end, progress=False)['Close']
+            return ndx
 
-ndx_data = fetch_verification_data()
-if not ndx_data.empty:
-    st.write("---")
-    st.subheader("📊 系统有效性实时验证 (GSMI vs Nasdaq-100)")
+        ndx_data = fetch_verification_data()
+        if not ndx_data.empty:
+            st.write("---")
+            st.subheader("📊 系统有效性实时验证 (GSMI vs Nasdaq-100)")
     
-    # 归一化处理以便对比
-    norm_ndx = (ndx_data / ndx_data.iloc[0]) * 100
-    # 注意：GSMI是实时分数，若要严格回测需保存历史分数，目前可用当前分数与近期趋势对比
+        # 归一化处理以便对比
+        norm_ndx = (ndx_data / ndx_data.iloc[0]) * 100
+        # 注意：GSMI是实时分数，若要严格回测需保存历史分数，目前可用当前分数与近期趋势对比
     
-    col_v1, col_v2 = st.columns([3, 1])
-    with col_v1:
-        fig_v = go.Figure()
-        fig_v.add_trace(go.Scatter(x=norm_ndx.index, y=norm_ndx.values, name="Nasdaq-100 (QQQ)", line=dict(color='#FFD700', width=2)))
-        # 这里仅为示意，实际回测需要存储历史GSMI分值
-        fig_v.update_layout(height=300, template="plotly_dark", title="观察点：QQQ 走势是否与宏观水源步调一致？")
-        st.plotly_chart(fig_v, use_container_width=True)
-    with col_v2:
-        # 计算相关性描述
-        st.write("**验证逻辑：**")
-        st.caption("1. 纳指是流动性的金丝雀。")
-        st.caption("2. 若 GSMI 高位而纳指不涨，说明可能存在‘情绪滞后’，通常是补涨机会。")
-        st.caption("3. 若 GSMI 破位而纳指横盘，说明‘无水之鱼’，谨防高位诱多。")
+        col_v1, col_v2 = st.columns([3, 1])
+        with col_v1:
+            fig_v = go.Figure()
+            fig_v.add_trace(go.Scatter(x=norm_ndx.index, y=norm_ndx.values, name="Nasdaq-100 (QQQ)", line=dict(color='#FFD700', width=2)))
+            # 这里仅为示意，实际回测需要存储历史GSMI分值
+            fig_v.update_layout(height=300, template="plotly_dark", title="观察点：QQQ 走势是否与宏观水源步调一致？")
+            st.plotly_chart(fig_v, use_container_width=True)
+        with col_v2:
+            # 计算相关性描述
+            st.write("**验证逻辑：**")
+            st.caption("1. 纳指是流动性的金丝雀。")
+            st.caption("2. 若 GSMI 高位而纳指不涨，说明可能存在‘情绪滞后’，通常是补涨机会。")
+            st.caption("3. 若 GSMI 破位而纳指横盘，说明‘无水之鱼’，谨防高位诱多。")
         
         r1, r2 = st.columns(2)
         with r1:
@@ -279,5 +279,6 @@ except Exception as e:
     st.error(f"系统错误: {e}")
 
 st.caption("GSMI Tactical | 数据源: FRED, yfinance. (Fed Assets 周期性延迟同步)")
+
 
 
