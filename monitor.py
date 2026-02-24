@@ -29,13 +29,18 @@ target_status = st.sidebar.radio("该板块目前拥挤度", ["冷清/低配", "
 # 找到这一行直接改数字即可
 DEFAULT_FMS_CASH = 3.3  # <--- 每月改这里
 DEFAULT_FMS_DATE = datetime(2026, 2, 15) # <--- 每月改日期
+crowded_options = ["美股大盘科技", "做多美元", "做空中国股票", "做多国债", "做多黄金", "其他"]
 DEFAULT_CROWDED = "做多黄金" # <--- 每月改最拥挤交易
 
 st.sidebar.markdown("---")
 st.sidebar.header("🗳️ BofA FMS 机构调查")
 fms_cash = st.sidebar.slider("机构现金水平 (%)", 3.0, 6.5, DEFAULT_FMS_CASH, 0.1)
 fms_date = st.sidebar.date_input("调查发布日期", DEFAULT_FMS_DATE)
-fms_crowded = st.sidebar.selectbox("当前最拥挤交易", ["美股大盘科技", "做多美元", "做空中国股票", "做多黄金", "其他"], index=2)
+fms_crowded = st.sidebar.selectbox(
+    "当前最拥挤交易", 
+    options=crowded_options, 
+    index=crowded_options.index(DEFAULT_CROWDED) 
+)
 
 st.sidebar.markdown("---")
 if "fred_api_key" in st.secrets:
@@ -248,6 +253,7 @@ except Exception as e:
 
 st.markdown("---")
 st.caption("GSMI Tactical | 45% 核心货币 (NL+TIPS) + 15% 全球汇率 (DXY) + 15% 机构情绪 (FMS) + 25% 宏观现实 (CuAu+Spread)")
+
 
 
 
