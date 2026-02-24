@@ -35,7 +35,7 @@ st.sidebar.markdown("---")
 st.sidebar.header("🗳️ BofA FMS 机构调查")
 fms_cash = st.sidebar.slider("机构现金水平 (%)", 3.0, 6.5, DEFAULT_FMS_CASH, 0.1)
 fms_date = st.sidebar.date_input("调查发布日期", DEFAULT_FMS_DATE)
-fms_crowded = st.sidebar.selectbox("当前最拥挤交易", ["美股大盘科技", "做多美元", "做空中国股票", "做多黄金"，"其他"], index=2)
+fms_crowded = st.sidebar.selectbox("当前最拥挤交易", ["美股大盘科技", "做多美元", "做空中国股票", "做多黄金", "其他"], index=2)
 
 st.sidebar.markdown("---")
 if "fred_api_key" in st.secrets:
@@ -248,5 +248,6 @@ except Exception as e:
 
 st.markdown("---")
 st.caption("GSMI Tactical | 45% 核心货币 (NL+TIPS) + 15% 全球汇率 (DXY) + 15% 机构情绪 (FMS) + 25% 宏观现实 (CuAu+Spread)")
+
 
 
