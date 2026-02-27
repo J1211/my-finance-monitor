@@ -234,16 +234,41 @@ try:
         r2.metric("高收益债利差", f"{latest['spread']:.0f} bps", f"评分: {score_linear(latest['spread'],300,600,10,True):.1f}/10")
         st.area_chart(df['cg_ratio'].tail(120), height=250)
 
+   
     with tabs[3]:
-        st.subheader("📈 系统验证 (GSMI vs Nasdaq)")
-        plot_df = df.tail(120).copy()
-        norm_qqq = (plot_df['qqq'] / plot_df['qqq'].iloc[0]) * 100
+        st.subheader("📈 系统验证 (GSMI vs Nasdaq) - 周度结构版")
+    
+        # --- 1. 重采样至每周五 ---
+        # 使用 .last() 确保取到每周最后一个有效数据
+        df_weekly = df.resample('W-FRI').last().dropna(subset=['gsmi_score', 'qqq'])
+    
+        # 归一化处理
+        norm_ndx = (df_weekly['qqq'] / df_weekly['qqq'].iloc[0]) * 100
+    
+        # --- 2. 绘制验证图表 ---
         fig_v = go.Figure()
-        fig_v.add_trace(go.Scatter(x=plot_df.index, y=plot_df['gsmi_score'], name="GSMI 历史评分", line=dict(color='#00ffcc', width=3)))
-        fig_v.add_trace(go.Scatter(x=plot_df.index, y=norm_qqq, name="纳指 QQQ (归一化)", line=dict(color='#FFD700', dash='dot'), yaxis="y2"))
-        fig_v.update_layout(height=400, template="plotly_dark", yaxis=dict(title="GSMI 分数", range=[0,100]), yaxis2=dict(overlaying="y", side="right", showgrid=False))
+        fig_v.add_trace(go.Scatter(x=df_weekly.index, y=df_weekly['gsmi_score'], 
+                               name="GSMI 每周五评分", line=dict(color='#00ffcc', width=4), mode='lines+markers'))
+        fig_v.add_trace(go.Scatter(x=df_weekly.index, y=norm_ndx, 
+                               name="纳指 QQQ (归一化)", line=dict(color='#FFD700', dash='dot', width=2), yaxis="y2"))
+    
+        fig_v.update_layout(
+            height=500, template="plotly_dark", hovermode="x unified",
+            yaxis=dict(title="GSMI 分数", range=[0, 100]),
+            yaxis2=dict(title="QQQ 指数 (基准100)", overlaying="y", side="right", showgrid=False),
+            legend=dict(orientation="h", y=1.1)
+        )
         st.plotly_chart(fig_v, use_container_width=True)
-        
+    
+        # --- 3. 实战决策助手 (针对周五上午的特殊逻辑) ---
+        today_weekday = datetime.now().weekday() # 4 代表周五
+        if today_weekday == 4:
+            st.info("💡 **周五实战提醒：**\n"
+                "当前 GSMI 已包含今晨更新的 NL 数据，而 QQQ 仍为昨夜收盘价。\n"
+                "- 若 GSMI 向上跳水而 QQQ 还没动：**潜在买入机会**。\n"
+                "- 若 GSMI 向下跳水而 QQQ 还在高位：**潜在减仓机会**。")
+    
+
         st.markdown("---")
         st.subheader("🌉 最后执行确认")
         hk1, hk2 = st.columns(2)
@@ -260,3 +285,4 @@ except Exception as e:
 
 st.markdown("---")
 st.caption("GSMI Tactical | 45% 核心货币 (NL+TIPS) + 15% 全球汇率 (DXY) + 15% 机构情绪 (FMS) + 25% 宏观现实 (CuAu+Spread)")
+
