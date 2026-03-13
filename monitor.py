@@ -27,7 +27,7 @@ target_status = st.sidebar.radio("该板块目前拥挤度", ["冷清/低配", "
 
 # --- 月度手动更新区 ---
 DEFAULT_FMS_CASH = 4.4  
-DEFAULT_FMS_DATE = datetime(2025, 2, 15) 
+DEFAULT_FMS_DATE = datetime(2026, 3, 13) 
 crowded_options = ["美股大盘科技", "做多美元", "做空中国股票", "做多国债", "做多黄金", "其他"]
 current_most_crowded = "做多黄金" 
 
@@ -285,5 +285,6 @@ except Exception as e:
 
 st.markdown("---")
 st.caption("GSMI Tactical | 45% 核心货币 (NL+TIPS) + 15% 全球汇率 (DXY) + 15% 机构情绪 (FMS) + 25% 宏观现实 (CuAu+Spread)")
+
 
 
