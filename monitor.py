@@ -94,29 +94,38 @@ def fetch_and_sync_data():
             return df['Close'].ffill()
         except: return pd.Series()
 
-    # 抓取数据
+    # --- 1. 抓取各指标 ---
+    data_dict = {}
     try:
-        tips = fred.get_series('DFII10', start, end)
-        spread = fred.get_series('BAMLH0A0HYM2', start, end)
-        assets = fred.get_series('WALCL', start, end)
-        tga = fred.get_series('WTREGEN', start, end)
-        rrp = fred.get_series('RRPONTSYD', start, end)
-    except:
-        tips = spread = assets = tga = rrp = pd.Series()
-    
-    dxy = safe_get_yf("DX-Y.NYB")
-    copper = safe_get_yf("HG=F")
-    gold = safe_get_yf("GC=F")
-    hkd = safe_get_yf("HKD=X")
-    hsi = safe_get_yf("^HSI")
-    as300 = safe_get_yf("000300.SS")
-    btc = safe_get_yf("BTC-USD")
-    qqq = safe_get_yf("QQQ")
+        data_dict['tips'] = fred.get_series('DFII10', start, end)
+        data_dict['spread'] = fred.get_series('BAMLH0A0HYM2', start, end)
+        data_dict['assets'] = fred.get_series('WALCL', start, end)
+        data_dict['tga'] = fred.get_series('WTREGEN', start, end)
+        data_dict['rrp'] = fred.get_series('RRPONTSYD', start, end)
+    except Exception as e:
+        st.error(f"FRED 数据读取失败: {e}")
 
-    df = pd.DataFrame({
-        'tips': tips, 'spread': spread, 'assets': assets, 'tga': tga, 'rrp': rrp,
-        'dxy': dxy, 'copper': copper, 'gold': gold, 'hkd': hkd, 'hsi': hsi, 'as300': as300, 'btc': btc, 'qqq': qqq
-    }).ffill().dropna()
+    data_dict['dxy'] = safe_get_yf("DX-Y.NYB")
+    if data_dict['dxy'].empty: data_dict['dxy'] = safe_get_yf("UUP") # 备用：美元指数ETF
+    
+    data_dict['copper'] = safe_get_yf("HG=F")
+    data_dict['gold'] = safe_get_yf("GC=F")
+    data_dict['hkd'] = safe_get_yf("HKD=X")
+    data_dict['hsi'] = safe_get_yf("^HSI")
+    data_dict['as300'] = safe_get_yf("000300.SS")
+    data_dict['btc'] = safe_get_yf("BTC-USD")
+    data_dict['qqq'] = safe_get_yf("QQQ")
+
+    # --- 2. 自检：看看谁是空的 ---
+    empty_indicators = [k for k, v in data_dict.items() if v is None or v.empty]
+    if empty_indicators:
+        st.warning(f"⚠️ 以下指标抓取失败，导致整表无法对齐: {', '.join(empty_indicators)}")
+        # 如果是关键指标（TIPS, DXY, Assets）为空，直接返回空表触发报错
+        if any(x in empty_indicators for x in ['tips', 'assets', 'dxy']):
+            return pd.DataFrame()
+
+    # --- 3. 合并与对齐 ---
+    df = pd.DataFrame(data_dict).ffill().dropna()
     
     if not df.empty:
         df['nl'] = (df['assets'] - df['tga'] - df['rrp']) / 1000000
@@ -296,3 +305,4 @@ except Exception as e:
 
 st.markdown("---")
 st.caption("GSMI Tactical | 45% 核心货币 (NL+TIPS) + 15% 全球汇率 (DXY) + 15% 机构情绪 (FMS) + 25% 宏观现实 (CuAu+Spread)")
+
