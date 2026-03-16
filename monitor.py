@@ -94,11 +94,15 @@ def fetch_and_sync_data():
             return df['Close'].ffill()
         except: return pd.Series()
 
-    tips = fred.get_series('DFII10', start, end)
-    spread = fred.get_series('BAMLH0A0HYM2', start, end)
-    assets = fred.get_series('WALCL', start, end)
-    tga = fred.get_series('WTREGEN', start, end)
-    rrp = fred.get_series('RRPONTSYD', start, end)
+    # 抓取数据
+    try:
+        tips = fred.get_series('DFII10', start, end)
+        spread = fred.get_series('BAMLH0A0HYM2', start, end)
+        assets = fred.get_series('WALCL', start, end)
+        tga = fred.get_series('WTREGEN', start, end)
+        rrp = fred.get_series('RRPONTSYD', start, end)
+    except:
+        tips = spread = assets = tga = rrp = pd.Series()
     
     dxy = safe_get_yf("DX-Y.NYB")
     copper = safe_get_yf("HG=F")
@@ -114,12 +118,14 @@ def fetch_and_sync_data():
         'dxy': dxy, 'copper': copper, 'gold': gold, 'hkd': hkd, 'hsi': hsi, 'as300': as300, 'btc': btc, 'qqq': qqq
     }).ffill().dropna()
     
-    df['nl'] = (df['assets'] - df['tga'] - df['rrp']) / 1000000
-    df['cg_ratio'] = df['copper'] / df['gold']
+    if not df.empty:
+        df['nl'] = (df['assets'] - df['tga'] - df['rrp']) / 1000000
+        df['cg_ratio'] = df['copper'] / df['gold']
     
     return df
 
 def calculate_history(df, fms_val):
+    if df.empty: return df
     gsmi_history = []
     nl_ma4 = df['nl'].rolling(20).mean()
     cg_ma200 = df['cg_ratio'].rolling(200).mean()
@@ -129,12 +135,18 @@ def calculate_history(df, fms_val):
             gsmi_history.append(np.nan)
             continue
         
+        # 1. NL (25)
         s_nl = (15 if df['nl'].iloc[i] > nl_ma4.iloc[i] else 0) + (10 if df['nl'].iloc[i] > df['nl'].iloc[i-5] else 0)
+        # 2. TIPS (20)
         s_tips = score_linear(df['tips'].iloc[i], 0.5, 2.5, 20, reverse=True)
+        # 3. DXY (15)
         s_dxy = score_linear(df['dxy'].iloc[i], 98, 108, 15, reverse=True)
+        # 4. FMS (15)
         s_cash = score_linear(fms_val, 3.5, 6.0, 15, reverse=False)
+        # 5. CG (15)
         s_cg = ((10 if df['cg_ratio'].iloc[i] > cg_ma200.iloc[i] else 0) if i > 200 else 0) + \
                (5 if df['cg_ratio'].iloc[i] > df['cg_ratio'].iloc[i-10:i-5].mean() else 0)
+        # 6. Spread (10)
         s_spread = score_linear(df['spread'].iloc[i], 300, 600, 10, reverse=True)
         
         gsmi_history.append(s_nl + s_tips + s_dxy + s_cash + s_cg + s_spread)
@@ -146,21 +158,33 @@ def calculate_history(df, fms_val):
 
 try:
     df_raw = fetch_and_sync_data()
+    
+    # 【安全检查 1】如果 DataFrame 为空
+    if df_raw.empty:
+        st.error("❌ 无法获取完整宏观数据，请检查 API Key 或重试。")
+        st.stop()
+    
     df = calculate_history(df_raw, fms_cash)
-    latest = df.iloc[-1]
-    gsmi_total = latest['gsmi_score']
+    
+    # 【安全检查 2】如果计算后仍无有效行
+    if len(df) < 1:
+        st.error("❌ 数据量不足以支持计算。")
+        st.stop()
 
-    # 计算最新单项得分
+    latest = df.iloc[-1]
+    gsmi_total = latest.get('gsmi_score', 0)
+
+    # 提取显示用的最新单项分
     nl_ma4_last = df['nl'].rolling(20).mean().iloc[-1]
-    s_nl_latest = (15 if latest['nl'] > nl_ma4_last else 0) + (10 if latest['nl'] > df['nl'].iloc[-6] else 0)
+    s_nl_latest = (15 if latest['nl'] > nl_ma4_last else 0) + (10 if len(df)>6 and latest['nl'] > df['nl'].iloc[-6] else 0)
     cg_ma200_last = df['cg_ratio'].rolling(200).mean().iloc[-1]
-    s_cg_latest = (10 if latest['cg_ratio'] > cg_ma200_last else 0) + (5 if latest['cg_ratio'] > df['cg_ratio'].iloc[-10:-5].mean() else 0)
+    s_cg_latest = (10 if latest['cg_ratio'] > cg_ma200_last else 0) + (5 if len(df)>10 and latest['cg_ratio'] > df['cg_ratio'].iloc[-10:-5].mean() else 0)
 
     # --- 5. UI 展示 ---
     c1, c2 = st.columns([2, 1])
     with c1:
         fig_g = go.Figure(go.Indicator(
-            mode = "gauge+number", value = gsmi_total,
+            mode = "gauge+number", value = gsmi_total if not np.isnan(gsmi_total) else 0,
             title = {'text': f"GSMI 战术总分 ({df.index[-1].strftime('%m-%d')})", 'font': {'size': 20}},
             gauge = {'axis': {'range': [0, 100]}, 'bar': {'color': "#00ffcc"},
                      'steps': [{'range': [0, 40], 'color': "#441111"}, {'range': [40, 60], 'color': "#444411"},
@@ -173,7 +197,7 @@ try:
         st.subheader("🚨 实时战术预警")
         t_map = {"冷清/低配": "🟢 低位安全", "标配": "🟡 中性观望", "极其拥挤": "🔴 警惕踩踏"}
         st.markdown(f"**关注目标: {target_name}**")
-        st.title(t_map[target_status])
+        st.title(t_map.get(target_status, "🟡 中性观望"))
         st.warning(f"FMS 最拥挤交易: {fms_crowded}")
 
     st.markdown("---")
@@ -189,7 +213,7 @@ try:
 
         m1, m2, m3 = st.columns(3)
         m1.metric("净流动性 (NL)", f"${latest['nl']:.2f}T", f"评分: {s_nl_latest}/25")
-        m2.metric("10Y TIPS (实际利率)", f"{latest['tips']:.2f}%", f"评分: {score_linear(latest['tips'],0.5,2.5,20,True):.1f}/20")
+        m2.metric("10Y TIPS", f"{latest['tips']:.2f}%", f"评分: {score_linear(latest['tips'],0.5,2.5,20,True):.1f}/20")
         m3.metric("美元指数 (DXY)", f"{latest['dxy']:.2f}", f"评分: {score_linear(latest['dxy'],98,108,15,True):.1f}/15")
         
         fig_nl = go.Figure()
@@ -204,25 +228,24 @@ try:
         with e1:
             st.metric("FMS 机构现金水平", f"{fms_cash}%", f"得分: {score_linear(fms_cash,3.5,6.0,15):.1f}/15")
             st.write("---")
-            # BTC 短期情绪计算
-            btc_ret = df['btc'].pct_change() * 100
-            last_28d = btc_ret.tail(28)
-            pos_days = len(last_28d[last_28d > 0])
-            neg_days = len(last_28d[last_28d < 0])
-            st.write("**BTC 28日情绪扫描**")
-            st.caption(f"📈 上涨天数: {pos_days} | 📉 下跌天数: {neg_days}")
-            # 状态预警
-            if pos_days >= 18: st.success("🔥 投机情绪极度活跃")
-            elif neg_days >= 18: st.error("❄️ 流动性极度低迷")
-            else: st.info("⚖️ 风险偏好震荡中")
+            if len(df) > 28:
+                btc_ret = df['btc'].pct_change() * 100
+                last_28d = btc_ret.tail(28)
+                pos_days = len(last_28d[last_28d > 0])
+                neg_days = len(last_28d[last_28d < 0])
+                st.write("**BTC 28日情绪扫描**")
+                st.caption(f"📈 上涨天数: {pos_days} | 📉 下跌天数: {neg_days}")
+                if pos_days >= 18: st.success("🔥 投机情绪极度活跃")
+                elif neg_days >= 18: st.error("❄️ 流动性极度低迷")
+                else: st.info("⚖️ 风险偏好震荡中")
+            else: st.info("正在积累 BTC 情绪数据...")
         
         with e2:
-            # 绘制 BTC 28日涨跌幅柱状图
-            colors = ['#00ffcc' if x > 0 else '#FF3131' for x in last_28d]
-            fig_btc_dist = go.Figure(go.Bar(x=last_28d.index, y=last_28d.values, marker_color=colors))
-            fig_btc_dist.update_layout(height=250, template="plotly_dark", title="BTC 28日逐日波动脉搏 (%)", 
-                                       margin=dict(l=10, r=10, t=40, b=10), yaxis=dict(title="日涨跌%"))
-            st.plotly_chart(fig_btc_dist, use_container_width=True)
+            if len(df) > 28:
+                colors = ['#00ffcc' if x > 0 else '#FF3131' for x in last_28d]
+                fig_btc_dist = go.Figure(go.Bar(x=last_28d.index, y=last_28d.values, marker_color=colors))
+                fig_btc_dist.update_layout(height=250, template="plotly_dark", title="BTC 28日波动脉搏 (%)", margin=dict(l=10, r=10, t=40, b=10))
+                st.plotly_chart(fig_btc_dist, use_container_width=True)
             
         st.write("**BTC 120日宏观趋势 (金丝雀价格线)**")
         st.line_chart(df['btc'].tail(120), height=200)
@@ -234,57 +257,42 @@ try:
         r2.metric("高收益债利差", f"{latest['spread']:.0f} bps", f"评分: {score_linear(latest['spread'],300,600,10,True):.1f}/10")
         st.area_chart(df['cg_ratio'].tail(120), height=250)
 
-   
     with tabs[3]:
-        st.subheader("📈 系统验证 (GSMI vs Nasdaq) - 周度结构版")
-    
-        # --- 1. 重采样至每周五 ---
-        # 使用 .last() 确保取到每周最后一个有效数据
+        st.subheader("📊 系统有效性验证 (GSMI vs Nasdaq 周度版)")
+        
+        # 这里的 W-FRI 是关键：重采样到每周五，解决频率错位
         df_weekly = df.resample('W-FRI').last().dropna(subset=['gsmi_score', 'qqq'])
-    
-        # 归一化处理
-        norm_ndx = (df_weekly['qqq'] / df_weekly['qqq'].iloc[0]) * 100
-    
-        # --- 2. 绘制验证图表 ---
-        fig_v = go.Figure()
-        fig_v.add_trace(go.Scatter(x=df_weekly.index, y=df_weekly['gsmi_score'], 
-                               name="GSMI 每周五评分", line=dict(color='#00ffcc', width=4), mode='lines+markers'))
-        fig_v.add_trace(go.Scatter(x=df_weekly.index, y=norm_ndx, 
-                               name="纳指 QQQ (归一化)", line=dict(color='#FFD700', dash='dot', width=2), yaxis="y2"))
-    
-        fig_v.update_layout(
-            height=500, template="plotly_dark", hovermode="x unified",
-            yaxis=dict(title="GSMI 分数", range=[0, 100]),
-            yaxis2=dict(title="QQQ 指数 (基准100)", overlaying="y", side="right", showgrid=False),
-            legend=dict(orientation="h", y=1.1)
-        )
-        st.plotly_chart(fig_v, use_container_width=True)
-    
-        # --- 3. 实战决策助手 (针对周五上午的特殊逻辑) ---
-        today_weekday = datetime.now().weekday() # 4 代表周五
-        if today_weekday == 4:
-            st.info("💡 **周五实战提醒：**\n"
-                "当前 GSMI 已包含今晨更新的 NL 数据，而 QQQ 仍为昨夜收盘价。\n"
-                "- 若 GSMI 向上跳水而 QQQ 还没动：**潜在买入机会**。\n"
-                "- 若 GSMI 向下跳水而 QQQ 还在高位：**潜在减仓机会**。")
-    
-
+        
+        if not df_weekly.empty and len(df_weekly) > 1:
+            norm_qqq = (df_weekly['qqq'] / df_weekly['qqq'].iloc[0]) * 100
+            fig_v = go.Figure()
+            fig_v.add_trace(go.Scatter(x=df_weekly.index, y=df_weekly['gsmi_score'], name="GSMI 每周五评分", line=dict(color='#00ffcc', width=4), mode='lines+markers'))
+            fig_v.add_trace(go.Scatter(x=df_weekly.index, y=norm_qqq, name="纳指 QQQ (归一化)", line=dict(color='#FFD700', dash='dot'), yaxis="y2"))
+            fig_v.update_layout(height=400, template="plotly_dark", yaxis=dict(title="GSMI 分数", range=[0,100]), yaxis2=dict(overlaying="y", side="right", showgrid=False))
+            st.plotly_chart(fig_v, use_container_width=True)
+            
+            # 周五实战提醒
+            if datetime.now().weekday() == 4:
+                st.info("💡 **周五实战提醒：**\n当前 GSMI 已包含今晨更新的 NL 数据，而 QQQ 仍为昨夜收盘价。")
+        else:
+            st.warning("数据积累中，暂无法生成周度对比图...")
+        
         st.markdown("---")
         st.subheader("🌉 最后执行确认")
         hk1, hk2 = st.columns(2)
         with hk1:
             st.metric("港元汇率 (USD/HKD)", f"{latest['hkd']:.4f}", "吸金" if latest['hkd'] < 7.80 else "失血")
-            st.write(f"📊 动能对比 HSI vs AS300: {float((latest['hsi']/df['hsi'].iloc[-20] - latest['as300']/df['as300'].iloc[-20])*100):+.2f}%")
+            if len(df) > 20:
+                hsi_perf = (latest['hsi']/df['hsi'].iloc[-20] - 1)*100
+                as300_perf = (latest['as300']/df['as300'].iloc[-20] - 1)*100
+                st.write(f"📊 20日动能差 HSI vs AS300: {hsi_perf - as300_perf:+.2f}%")
         with hk2:
             st.markdown(f"🔍 [AASTOCKS 沽空比率](http://www.aastocks.com/tc/stocks/market/shortselling/securities-eligible.aspx)")
             st.markdown(f"🔍 [MacroMicro 中国信贷脉冲](https://www.macromicro.me/collections/31/cn-finance-relative/35559/china-credit-impulse-index)")
             st.slider("手动录入：大市沽空比率 (%)", 5.0, 35.0, 16.5, 0.1)
 
 except Exception as e:
-    st.error(f"系统运行错误: {e}")
+    st.error(f"发生索引错误: {e}。通常由于数据抓取不足导致，请尝试刷新。")
 
 st.markdown("---")
 st.caption("GSMI Tactical | 45% 核心货币 (NL+TIPS) + 15% 全球汇率 (DXY) + 15% 机构情绪 (FMS) + 25% 宏观现实 (CuAu+Spread)")
-
-
-
