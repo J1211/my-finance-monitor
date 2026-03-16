@@ -112,7 +112,7 @@ def fetch_and_sync_data():
         uup_raw = safe_get_yf("UUP")
         if not uup_raw.empty:
             # 使用历史转换系数将 UUP 价格还原为 DXY 指数点数 (DXY 104 / UUP 28.3 ≈ 3.68)
-            data_dict['dxy'] = uup_raw * 3.68 
+            data_dict['dxy'] = uup_raw * 3.60 
             # 标记一下使用的是备用数据（可选）
         else:
             data_dict['dxy'] = pd.Series()
