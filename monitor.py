@@ -105,9 +105,20 @@ def fetch_and_sync_data():
     except Exception as e:
         st.error(f"FRED 数据读取失败: {e}")
 
-    data_dict['dxy'] = safe_get_yf("DX-Y.NYB")
-    if data_dict['dxy'].empty: data_dict['dxy'] = safe_get_yf("UUP") # 备用：美元指数ETF
+    # --- 修正后的 DXY 获取逻辑 ---
+    dxy_raw = safe_get_yf("DX-Y.NYB")
     
+    if dxy_raw.empty or dxy_raw.iloc[-1] < 50: # 如果抓不到或数值明显不对
+        uup_raw = safe_get_yf("UUP")
+        if not uup_raw.empty:
+            # 使用历史转换系数将 UUP 价格还原为 DXY 指数点数 (DXY 104 / UUP 28.3 ≈ 3.68)
+            data_dict['dxy'] = uup_raw * 3.68 
+            # 标记一下使用的是备用数据（可选）
+        else:
+            data_dict['dxy'] = pd.Series()
+    else:
+        data_dict['dxy'] = dxy_raw
+        
     data_dict['copper'] = safe_get_yf("HG=F")
     data_dict['gold'] = safe_get_yf("GC=F")
     data_dict['hkd'] = safe_get_yf("HKD=X")
