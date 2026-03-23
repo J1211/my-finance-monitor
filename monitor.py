@@ -252,6 +252,7 @@ try:
         if datetime.now().weekday() == 4: st.info("💡 **周五实战提醒：** GSMI 已包含今晨 NL 更新，而 QQQ 仍为昨夜收盘价。")
         st.write("---")
         st.subheader("🌉 最后执行确认")
+        st.info("💡 跨境执行确认：先看 M1-M2 确认活钱，再看信贷脉冲确认政策，最后看沽空比观察对手。")
         hk1, hk2 = st.columns(2)
         with hk1:
             st.metric("港元汇率 (USD/HKD)", f"{latest['hkd']:.4f}", "吸金" if latest['hkd'] < 7.80 else "失血")
