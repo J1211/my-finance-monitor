@@ -233,6 +233,9 @@ try:
         with e2:
             st.plotly_chart(go.Figure(go.Bar(x=last_28d.index, y=last_28d.values, marker_color=['#00ffcc' if x>0 else '#FF3131' for x in last_28d])).update_layout(height=250, template="plotly_dark", title="BTC 28日逐日波动脉搏 (%)", margin=dict(l=10, r=10, t=40, b=10)), use_container_width=True)
 
+        st.write("**BTC 120日宏观趋势 (金丝雀价格线)**")
+        st.line_chart(df['btc'].tail(120), height=200)
+        
     with tabs[2]:
         st.subheader("🏗️ 现实增长与信用防线")
         r1, r2 = st.columns(2)
