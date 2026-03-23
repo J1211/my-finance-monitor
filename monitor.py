@@ -41,6 +41,12 @@ fms_crowded = st.sidebar.selectbox(
     index=crowded_options.index(current_most_crowded)
 )
 
+# --- TGA 目标手动更新区 ---
+# 数据源：搜索 "Treasury Quarterly Refunding Cash Balance"
+st.sidebar.markdown("---")
+st.sidebar.header("🏦 财政部 TGA 预测配置")
+tga_target = st.sidebar.number_input("本季末 TGA 目标 (十亿$)", value=850, step=50)
+
 st.sidebar.markdown("---")
 if "fred_api_key" in st.secrets:
     fred_key = st.secrets["fred_api_key"]
@@ -94,6 +100,37 @@ def fetch_and_sync_data():
             return df['Close'].ffill()
         except: return pd.Series()
 
+def get_tga_forecast(curr_tga_val):
+    """curr_tga_val 为十亿单位"""
+    today = datetime.now()
+    m, d = today.month, today.day
+    
+    # 1. 季节性节拍判断
+    seasonal_msg = ""
+    risk_level = "Normal" # Normal, High, Low
+    
+    if m == 4 and 10 <= d <= 22:
+        seasonal_msg = "🚨 【年度吸水期】个人税收汇缴高峰，TGA 惯性飙升，流动性面临强压。"
+        risk_level = "High"
+    elif m in [6, 9, 12] and 12 <= d <= 20:
+        seasonal_msg = "🟠 【季中吸水期】企业预缴税窗口，TGA 阶段性回升，NL 存在收缩风险。"
+        risk_level = "High"
+    elif 13 <= d <= 18:
+        seasonal_msg = "🟢 【利息释放期】国债付息高峰，TGA 通常下降，为市场提供流动性甘霖。"
+        risk_level = "Low"
+    elif 1 <= d <= 5:
+        seasonal_msg = "🔵 【财政支出期】月初福利与政府开支高峰，水源背景偏暖。"
+        risk_level = "Low"
+    else:
+        seasonal_msg = "⚪ 【平稳周期】目前无重大税收/支出节点，关注目标回归。"
+
+    # 2. 目标回归缺口判断
+    gap = tga_target - curr_tga_val
+    # 若 gap 为负（实际>目标），说明政府“超额蓄水”，未来要放水（利好）
+    # 若 gap 为正（实际<目标），说明政府“水位不足”，未来要发债（利空）
+    
+    return seasonal_msg, gap, risk_level
+    
     # --- 1. 抓取各指标 ---
     data_dict = {}
     try:
@@ -224,6 +261,30 @@ try:
     tabs = st.tabs(["💧 流动性水源", "🧠 情绪与购买力", "🏗️ 现实与防线", "📊 系统验证与确认"])
 
     with tabs[0]:
+        st.subheader("🏦 财政部水源预测 (TGA Forward-Looking)")
+        
+        # 获取 TGA 预测信息 (latest['tga'] 原单位为百万，转为十亿)
+        curr_tga_billion = latest['tga'] / 1000
+        msg, gap, risk = get_tga_forecast(curr_tga_billion)
+        
+        # 视觉展示
+        if risk == "High": st.error(msg)
+        elif risk == "Low": st.success(msg)
+        else: st.info(msg)
+        
+        c_p1, c_p2, c_p3 = st.columns(3)
+        c_p1.metric("当前 TGA 余额", f"${curr_tga_billion:.1f}B")
+        c_p2.metric("季末目标位", f"${tga_target}B")
+        
+        # 计算回归引力
+        gap_color = "normal" if gap < 0 else "inverse" # 负缺口是好事（放水空间）
+        c_p3.metric("目标回归缺口", f"{gap:+.1f}B", 
+                  help="负值代表政府盈余较多，未来倾向于放水（利好NL）；正值代表需要发债吸水（利空NL）",
+                  delta_color=gap_color)
+        
+        st.write("---")
+        # 下接原有的 NL 四象限和图表...
+        
         st.subheader("🏦 核心流动性水源 (NL + TIPS + DXY)")
         q1, q2, q3, q4 = st.columns(4)
         q1.markdown('<div class="quadrant-box">🔵 <b>25分: NL扩张期</b><br>🚀 进攻</div>', unsafe_allow_html=True)
