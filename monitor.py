@@ -41,6 +41,25 @@ st.sidebar.markdown("---")
 st.sidebar.header("🏦 财政部 TGA 预测配置")
 tga_target = st.sidebar.number_input("本季末 TGA 余额目标 (十亿$)", value=850, step=50)
 
+with st.sidebar.expander("📖 GSMI 评分规则细则"):
+    st.markdown("""
+    **1. 核心货币 (45分):**  
+    - NL > 4周均线 (+15)  
+    - NL 环比增加 (+10)  
+    - TIPS 0.5%->2.5% (20分线性)  
+    
+    **2. 全球汇率 (15分):**  
+    - DXY 98->108 (15分线性)  
+    
+    **3. 机构情绪 (15分):**  
+    - FMS 6.0%->3.5% (15分线性)  
+    
+    **4. 宏观现实 (25分):**  
+    - 铜金比 > 200日线 (+10)  
+    - 铜金比 近5日向上 (+5)  
+    - 利差 300->600bps (10分线性)
+    """)
+
 st.sidebar.markdown("---")
 if "fred_api_key" in st.secrets:
     fred_key = st.secrets["fred_api_key"]
