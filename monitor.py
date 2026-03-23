@@ -85,7 +85,7 @@ def get_tga_forecast(curr_tga_billion, target_val):
     """TGA 季节性与目标缺口判断"""
     today = datetime.now()
     m, d = today.month, today.day
-    msg, risk = "⚪ 【平稳周期】关注季度目标回归。", "Normal"
+    msg, risk = "⚪ 【平稳周期】目前无重大税收节点，关注季度目标回归。", "Normal"
     
     if m == 4 and 10 <= d <= 22:
         msg, risk = "🚨 【年度吸水期】个人税高峰，TGA将飙升，NL面临强压。", "High"
