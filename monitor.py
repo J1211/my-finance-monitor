@@ -20,7 +20,7 @@ st.markdown("""
 
 st.title("🏹 GSMI 全球聪明钱监控与验证系统")
 
-# --- 2. 侧边栏配置 (先定义变量防止NameError) ---
+# --- 2. 侧边栏配置 ---
 st.sidebar.header("🛠️ 核心参数配置")
 target_name = st.sidebar.text_input("关注板块名称", "中概科技龙头")
 target_status = st.sidebar.radio("该板块目前拥挤度", ["冷清/低配", "标配", "极其拥挤"])
@@ -41,11 +41,12 @@ st.sidebar.markdown("---")
 st.sidebar.header("🏦 财政部 TGA 预测配置")
 tga_target = st.sidebar.number_input("本季末 TGA 余额目标 (十亿$)", value=850, step=50)
 
+st.sidebar.markdown("---")
 with st.sidebar.expander("📖 GSMI 评分规则细则"):
     st.markdown("""
     **1. 核心货币 (45分):**  
     - NL > 4周均线 (+15)  
-    - NL 环比增加 (+10)  
+    - NL 本周环比增加 (+10)  
     - TIPS 0.5%->2.5% (20分线性)  
     
     **2. 全球汇率 (15分):**  
@@ -72,7 +73,7 @@ if not fred_key:
 
 fred = Fred(api_key=fred_key)
 
-# --- 3. 核心辅助函数 ---
+# --- 3. 数据处理函数 ---
 
 def score_linear(val, min_val, max_val, max_score, reverse=False):
     if not reverse:
@@ -82,20 +83,13 @@ def score_linear(val, min_val, max_val, max_score, reverse=False):
     return max(0, min(max_score, score))
 
 def get_tga_forecast(curr_tga_billion, target_val):
-    """TGA 季节性与目标缺口判断"""
     today = datetime.now()
     m, d = today.month, today.day
-    msg, risk = "⚪ 【平稳周期】目前无重大税收节点，关注季度目标回归。", "Normal"
-    
-    if m == 4 and 10 <= d <= 22:
-        msg, risk = "🚨 【年度吸水期】个人税高峰，TGA将飙升，NL面临强压。", "High"
-    elif m in [6, 9, 12] and 12 <= d <= 20:
-        msg, risk = "🟠 【季中吸水期】企业预缴税，TGA阶段性回升，NL承压。", "High"
-    elif 13 <= d <= 18:
-        msg, risk = "🟢 【利息释放期】国债付息高峰，TGA回落，利好流动性。", "Low"
-    elif 1 <= d <= 5:
-        msg, risk = "🔵 【财政支出期】月初政府开支高峰，水源背景偏暖。", "Low"
-
+    msg, risk = "⚪ 【平稳周期】目前无重大税收节点，重点关注目标回归。", "Normal"
+    if m == 4 and 10 <= d <= 22: msg, risk = "🚨 【年度吸水期】个人税高峰，NL面临强压。", "High"
+    elif m in [6, 9, 12] and 12 <= d <= 20: msg, risk = "🟠 【季中吸水期】企业预缴税，NL承压。", "High"
+    elif 13 <= d <= 18: msg, risk = "🟢 【利息释放期】国债付息，利好流动性修复。", "Low"
+    elif 1 <= d <= 5: msg, risk = "🔵 【财政支出期】月初支出高峰，水源背景偏暖。", "Low"
     gap = target_val - curr_tga_billion
     return msg, gap, risk
 
@@ -103,7 +97,6 @@ def get_tga_forecast(curr_tga_billion, target_val):
 def fetch_and_sync_data():
     end = datetime.now()
     start = end - timedelta(days=500)
-    
     def safe_get_yf(ticker):
         try:
             df = yf.download(ticker, start=start, end=end, progress=False)
@@ -113,7 +106,6 @@ def fetch_and_sync_data():
         except: return pd.Series(dtype='float64')
 
     data_dict = {}
-    # 抓取 FRED
     try:
         data_dict['tips'] = fred.get_series('DFII10', start, end)
         data_dict['spread'] = fred.get_series('BAMLH0A0HYM2', start, end)
@@ -122,13 +114,11 @@ def fetch_and_sync_data():
         data_dict['rrp'] = fred.get_series('RRPONTSYD', start, end)
     except: pass
 
-    # 抓取 YF (含 DXY 备用系数转换)
     dxy_raw = safe_get_yf("DX-Y.NYB")
     if dxy_raw.empty or dxy_raw.iloc[-1] < 50:
         uup = safe_get_yf("UUP")
         data_dict['dxy'] = uup * 3.60 if not uup.empty else pd.Series(dtype='float64')
-    else:
-        data_dict['dxy'] = dxy_raw
+    else: data_dict['dxy'] = dxy_raw
 
     data_dict['copper'] = safe_get_yf("HG=F")
     data_dict['gold'] = safe_get_yf("GC=F")
@@ -138,7 +128,6 @@ def fetch_and_sync_data():
     data_dict['btc'] = safe_get_yf("BTC-USD")
     data_dict['qqq'] = safe_get_yf("QQQ")
 
-    # 对齐数据并彻底清理
     df = pd.DataFrame(data_dict).ffill().dropna()
     if not df.empty:
         df['nl'] = (df['assets'] - df['tga'] - df['rrp']) / 1000000
@@ -151,8 +140,7 @@ def calculate_history(df, fms_val):
     nl_ma = df['nl'].rolling(20).mean()
     cg_ma = df['cg_ratio'].rolling(200).mean()
     for i in range(len(df)):
-        if i < 20: 
-            gsmi_h.append(np.nan); continue
+        if i < 20: gsmi_h.append(np.nan); continue
         s_nl = (15 if df['nl'].iloc[i] > nl_ma.iloc[i] else 0) + (10 if df['nl'].iloc[i] > df['nl'].iloc[i-5] else 0)
         s_tips = score_linear(df['tips'].iloc[i], 0.5, 2.5, 20, True)
         s_dxy = score_linear(df['dxy'].iloc[i], 98, 108, 15, True)
@@ -163,18 +151,20 @@ def calculate_history(df, fms_val):
     df['gsmi_score'] = gsmi_h
     return df
 
-# --- 4. 执行逻辑 ---
+# --- 4. 执行与展现 ---
 
 try:
     df_raw = fetch_and_sync_data()
-    if df_raw.empty:
-        st.error("数据抓取不全。请检查 FRED Key 或网络。")
-        st.stop()
-    
+    if df_raw.empty: st.error("数据抓取失败"); st.stop()
     df = calculate_history(df_raw, fms_cash)
     latest = df.iloc[-1]
-    
-    # --- 5. UI 展示 ---
+
+    # 【新增】计算最新单项分用于 Metric 显示
+    nl_ma_last = df['nl'].rolling(20).mean().iloc[-1]
+    s_nl_latest = (15 if latest['nl'] > nl_ma_last else 0) + (10 if latest['nl'] > df['nl'].iloc[-6] else 0)
+    cg_ma_last = df['cg_ratio'].rolling(200).mean().iloc[-1]
+    s_cg_latest = (10 if latest['cg_ratio'] > cg_ma_last else 0) + (5 if latest['cg_ratio'] > df['cg_ratio'].iloc[-10:-5].mean() else 0)
+
     c1, c2 = st.columns([2, 1])
     with c1:
         st.plotly_chart(go.Figure(go.Indicator(
@@ -202,22 +192,21 @@ try:
         elif t_risk == "Low": st.success(t_msg)
         else: st.info(t_msg)
         
-        # TGA 目标回归卡片
         col_t1, col_t2, col_t3 = st.columns(3)
         col_t1.metric("当前 TGA 余额", f"${latest['tga']/1000:.1f}B")
         col_t2.metric("季末目标位", f"${tga_target}B")
-        col_t3.metric("目标回归缺口", f"{t_gap:+.1f}B", delta_color="normal" if t_gap < 0 else "inverse")
+        col_t3.metric("目标回归缺口", f"{t_gap:+.1f}B", delta_color="normal" if t_gap < 0 else "inverse", help="负缺口代表未来有放水红利")
         
         st.write("---")
-        # NL 四象限
         q1, q2, q3, q4 = st.columns(4)
-        q1.markdown('<div class="quadrant-box">🔵 <b>25分: NL扩张期</b><br>水位高+放水中 🚀 进攻</div>', unsafe_allow_html=True)
-        q2.markdown('<div class="quadrant-box">🟡 <b>15分: NL滞涨期</b><br>水位高+放水慢 ⚠️ 警惕</div>', unsafe_allow_html=True)
-        q3.markdown('<div class="quadrant-box">🟠 <b>10分: NL修复期</b><br>水位低+放水启 🔍 观察</div>', unsafe_allow_html=True)
-        q4.markdown('<div class="quadrant-box">🔴 <b>0分: NL衰退期</b><br>水位低+漏水中 🛑 空仓</div>', unsafe_allow_html=True)
+        q1.markdown('<div class="quadrant-box">🔵 <b>25分: NL扩张期</b> (水位高+放水中) 🚀 进攻</div>', unsafe_allow_html=True)
+        q2.markdown('<div class="quadrant-box">🟡 <b>15分: NL滞涨期</b> (水位高+放水慢) ⚠️ 警惕</div>', unsafe_allow_html=True)
+        q3.markdown('<div class="quadrant-box">🟠 <b>10分: NL修复期</b> (水位低+放水启) 🔍 观察</div>', unsafe_allow_html=True)
+        q4.markdown('<div class="quadrant-box">🔴 <b>0分: NL衰退期</b> (水位低+漏水中) 🛑 空仓</div>', unsafe_allow_html=True)
 
         m1, m2, m3 = st.columns(3)
-        m1.metric("净流动性 (NL)", f"${latest['nl']:.2f}T", f"周变: {latest['nl'] - df['nl'].iloc[-6]:+.3f}T")
+        # --- 修正点：在 Delta 位置强行加入分数 ---
+        m1.metric("净流动性 (NL)", f"${latest['nl']:.2f}T", f"评分: {s_nl_latest}/25 | 周变: {latest['nl'] - df['nl'].iloc[-6]:+.3f}T")
         m2.metric("10Y TIPS", f"{latest['tips']:.2f}%", f"评分: {score_linear(latest['tips'],0.5,2.5,20,True):.1f}/20")
         m3.metric("美元指数 (DXY)", f"{latest['dxy']:.2f}", f"评分: {score_linear(latest['dxy'],98,108,15,True):.1f}/15")
         
@@ -247,21 +236,22 @@ try:
     with tabs[2]:
         st.subheader("🏗️ 现实增长与信用防线")
         r1, r2 = st.columns(2)
-        r1.metric("铜金比趋势", f"{latest['cg_ratio']:.4f}", "高于200MA" if latest['cg_ratio'] > df['cg_ratio'].rolling(200).mean().iloc[-1] else "低于200MA")
+        # --- 修正点：在此加入分数显示 ---
+        r1.metric("铜金比趋势", f"{latest['cg_ratio']:.4f}", f"评分: {s_cg_latest}/15 | {'高于200MA' if latest['cg_ratio'] > cg_ma_last else '低于200MA'}")
         r2.metric("高收益债利差", f"{latest['spread']:.0f} bps", f"评分: {score_linear(latest['spread'],300,600,10,True):.1f}/10")
         st.area_chart(df['cg_ratio'].tail(120), height=250)
 
     with tabs[3]:
-        st.subheader("📈 系统验证 (GSMI vs Nasdaq 周度版)")
+        st.subheader("📊 系统验证 (GSMI vs Nasdaq 周度版)")
         df_w = df.resample('W-FRI').last().dropna(subset=['gsmi_score', 'qqq'])
         norm_q = (df_w['qqq'] / df_w['qqq'].iloc[0]) * 100
         fig_v = go.Figure()
         fig_v.add_trace(go.Scatter(x=df_w.index, y=df_w['gsmi_score'], name="GSMI 评分", line=dict(color='#00ffcc', width=4), mode='lines+markers'))
         fig_v.add_trace(go.Scatter(x=df_w.index, y=norm_q, name="QQQ (归一化)", line=dict(color='#FFD700', dash='dot'), yaxis="y2"))
         st.plotly_chart(fig_v.update_layout(height=400, template="plotly_dark", yaxis=dict(title="GSMI", range=[0,100]), yaxis2=dict(overlaying="y", side="right", showgrid=False)), use_container_width=True)
-        if datetime.now().weekday() == 4: st.info("💡 **周五实战提醒：** GSMI 已包含今晨 NL 更新，而 QQQ 仍为昨夜价。")
+        if datetime.now().weekday() == 4: st.info("💡 **周五实战提醒：** GSMI 已包含今晨 NL 更新，而 QQQ 仍为昨夜收盘价。")
         st.write("---")
-        st.subheader("🌉 执行确认")
+        st.subheader("🌉 最后执行确认")
         hk1, hk2 = st.columns(2)
         with hk1:
             st.metric("港元汇率 (USD/HKD)", f"{latest['hkd']:.4f}", "吸金" if latest['hkd'] < 7.80 else "失血")
