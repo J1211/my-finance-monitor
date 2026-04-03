@@ -39,7 +39,7 @@ fms_crowded = st.sidebar.selectbox("当前最拥挤交易", options=crowded_opti
 
 st.sidebar.markdown("---")
 st.sidebar.header("🏦 财政部 TGA 预测配置")
-tga_target = st.sidebar.number_input("本季末 TGA 余额目标 (十亿$)", value=850, step=50)
+tga_target = st.sidebar.number_input("本季末 TGA 余额目标 (十亿$)", value=900, step=50)
 
 st.sidebar.markdown("---")
 with st.sidebar.expander("📖 GSMI 评分规则细则"):
