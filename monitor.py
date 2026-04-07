@@ -136,6 +136,12 @@ def fetch_and_sync_data():
 
 def calculate_history(df, fms_val):
     if df.empty: return df
+    
+    # 【新增插入点】：将利差从百分比转换为基点 (bps) ---
+    # 增加一个逻辑判断，防止在某些情况下重复乘以100
+    if 'spread' in df.columns and df['spread'].iloc[-1] < 50:
+        df['spread'] = df['spread'] * 100
+    # --------------------------------------------------
     gsmi_h = []
     nl_ma = df['nl'].rolling(20).mean()
     cg_ma = df['cg_ratio'].rolling(200).mean()
