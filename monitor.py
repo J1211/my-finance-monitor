@@ -248,19 +248,20 @@ try:
         st.subheader("🏗️ 现实增长与信用防线")
         r1, r2 = st.columns(2)
         
-        # 1. 铜金比模块
+        # --- 1. 铜金比模块 ---
         with r1:
             df['cg_200ma'] = df['cg_ratio'].rolling(200).mean()
             cg_val = latest['cg_ratio']
             ma_val = df['cg_200ma'].iloc[-1]
             
-            # 动态文字提示
             cg_status = "🟠 低于均线 (重力压制)" if cg_val < ma_val else "🟢 高于均线 (动能扩张)"
             st.metric("铜金比趋势", f"{cg_val:.4f}", f"评分: {s_cg_latest}/15 | {cg_status}")
             
             fig_cg = go.Figure()
+            # 铜金比实线
             fig_cg.add_trace(go.Scatter(x=df.index[-180:], y=df['cg_ratio'].tail(180), 
-                                      name="铜金比", line=dict(color='#00ffcc', width=3)))
+                                      name="铜金比现状", line=dict(color='#00ffcc', width=3)))
+            # 200MA 橙色虚线
             fig_cg.add_trace(go.Scatter(x=df.index[-180:], y=df['cg_200ma'].tail(180), 
                                       name="200MA (重力平衡线)", line=dict(color='orange', width=2, dash='dash')))
             
@@ -270,29 +271,29 @@ try:
                                  yaxis=dict(gridcolor="#333", tickformat=".4f"))
             st.plotly_chart(fig_cg, use_container_width=True)
 
-        # 2. 信用利差模块 (颜色与逻辑已与左图完全统一)
+        # --- 2. 信用利差模块 (完全统一格式) ---
         with r2:
             sp_val = latest['spread']
-            # 动态文字提示逻辑
-            sp_status = "🟢 地基稳固 (低于500bps)" if sp_val < 500 else "🚨 信用危机 (突破500bps)"
-            
-            st.metric("高收益债利差 (Spread)", f"{sp_val:.0f} bps", 
+            sp_status = "🟢 地基稳固 (低于500)" if sp_val < 500 else "🚨 信用危机 (突破500)"
+            st.metric("高收益债利差", f"{sp_val:.0f} bps", 
                       f"评分: {score_linear(sp_val,300,600,10,True):.1f}/10 | {sp_status}")
             
             fig_spread = go.Figure()
-            # 曲线改为青色以统一视觉
-            fig_spread.add_trace(go.Scatter(x=df.index[-120:], y=df['spread'].tail(120), 
-                                          name="利差趋势", line=dict(color='#00ffcc', width=3)))
+            # 利差实线 (统一为青色)
+            fig_spread.add_trace(go.Scatter(x=df.index[-180:], y=df['spread'].tail(180), 
+                                          name="利差现状", line=dict(color='#00ffcc', width=3)))
             
-            # 500bps 警戒线改为橙色虚线以统一逻辑
-            fig_spread.add_shape(type="line", x0=df.index[-120], x1=df.index[-1], y0=500, y1=500,
-                                line=dict(color="orange", width=2, dash="dash"))
+            # 500bps 警戒线 (统一为橙色虚线格式)
+            # 创建一个全为 500 的序列用于绘图
+            warning_line = [500] * 180
+            fig_spread.add_trace(go.Scatter(x=df.index[-180:], y=warning_line, 
+                                          name="500bps (生存警戒线)", line=dict(color='orange', width=2, dash='dash')))
             
             fig_spread.update_layout(height=300, template="plotly_dark", 
                                      margin=dict(l=10, r=10, t=10, b=10),
+                                     legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
                                      yaxis=dict(title="Basis Points (bps)", gridcolor="#333"))
             st.plotly_chart(fig_spread, use_container_width=True)
-            st.caption("💡 观察点：当利差（青色线）向上冲击橙色虚线时，说明全社会违约风险激增。")
     
     with tabs[3]:
         st.subheader("📊 系统验证 (GSMI vs Nasdaq 周度版)")
