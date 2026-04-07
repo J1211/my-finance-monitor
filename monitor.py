@@ -248,11 +248,32 @@ try:
         st.subheader("🏗️ 现实增长与信用防线")
         r1, r2 = st.columns(2)
         
-        # 1. 铜金比模块 (保持原样)
+        # 1. 铜金比模块 (升级为 Plotly 双线版)
         with r1:
-            st.metric("铜金比趋势", f"{latest['cg_ratio']:.4f}", f"评分: {s_cg_latest}/15")
-            st.area_chart(df['cg_ratio'].tail(120), height=250)
+            # 计算 200MA 用于绘图
+            df['cg_200ma'] = df['cg_ratio'].rolling(200).mean()
             
+            # 定义指标卡的颜色和文字提示
+            cg_status = "高于200MA (多头)" if latest['cg_ratio'] > df['cg_200ma'].iloc[-1] else "低于200MA (空头)"
+            st.metric("铜金比趋势", f"{latest['cg_ratio']:.4f}", f"评分: {s_cg_latest}/15 | {cg_status}")
+            
+            # 使用 Plotly 绘制
+            fig_cg = go.Figure()
+            # 铜金比实线
+            fig_cg.add_trace(go.Scatter(x=df.index[-180:], y=df['cg_ratio'].tail(180), 
+                                      name="铜金比", line=dict(color='#00ffcc', width=3)))
+            # 200日均线 (虚线)
+            fig_cg.add_trace(go.Scatter(x=df.index[-180:], y=df['cg_200ma'].tail(180), 
+                                      name="200MA (重力线)", line=dict(color='white', width=2, dash='dash')))
+            
+            fig_cg.update_layout(height=300, template="plotly_dark", 
+                                 margin=dict(l=10, r=10, t=10, b=10),
+                                 legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                                 yaxis=dict(gridcolor="#333", tickformat=".4f"))
+            st.plotly_chart(fig_cg, use_container_width=True)
+            st.caption("💡 观察点：当青色线站上白色虚线，且斜率向上，代表全球经济进入扩张期。")
+
+           
         # 2. 信用利差模块 (升级为曲线版)
         with r2:
             st.metric("高收益债利差 (Spread)", f"{latest['spread']:.0f} bps", 
