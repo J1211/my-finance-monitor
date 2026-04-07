@@ -248,51 +248,47 @@ try:
         st.subheader("🏗️ 现实增长与信用防线")
         r1, r2 = st.columns(2)
         
-        # 1. 铜金比模块 (升级为 Plotly 双线版)
         with r1:
-            # 计算 200MA 用于绘图
+            # 计算 200MA
             df['cg_200ma'] = df['cg_ratio'].rolling(200).mean()
             
-            # 定义指标卡的颜色和文字提示
-            cg_status = "高于200MA (多头)" if latest['cg_ratio'] > df['cg_200ma'].iloc[-1] else "低于200MA (空头)"
-            st.metric("铜金比趋势", f"{latest['cg_ratio']:.4f}", f"评分: {s_cg_latest}/15 | {cg_status}")
+            cg_val = latest['cg_ratio']
+            ma_val = df['cg_200ma'].iloc[-1]
             
-            # 使用 Plotly 绘制
+            # 动态文字提示
+            cg_status = "🟠 低于均线 (重力压制)" if cg_val < ma_val else "🟢 高于均线 (动能扩张)"
+            st.metric("铜金比趋势", f"{cg_val:.4f}", f"评分: {s_cg_latest}/15 | {cg_status}")
+            
             fig_cg = go.Figure()
-            # 铜金比实线
+            # 1. 铜金比实线
             fig_cg.add_trace(go.Scatter(x=df.index[-180:], y=df['cg_ratio'].tail(180), 
                                       name="铜金比", line=dict(color='#00ffcc', width=3)))
-            # 200日均线 (虚线)
+            # 2. 200日均线 (橙色虚线)
             fig_cg.add_trace(go.Scatter(x=df.index[-180:], y=df['cg_200ma'].tail(180), 
-                                      name="200MA (重力线)", line=dict(color='white', width=2, dash='dash')))
+                                      name="200MA (重力平衡线)", 
+                                      line=dict(color='orange', width=2, dash='dash'))) # 已改为 orange
             
             fig_cg.update_layout(height=300, template="plotly_dark", 
                                  margin=dict(l=10, r=10, t=10, b=10),
                                  legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
                                  yaxis=dict(gridcolor="#333", tickformat=".4f"))
             st.plotly_chart(fig_cg, use_container_width=True)
-            st.caption("💡 观察点：当青色线站上白色虚线，且斜率向上，代表全球经济进入扩张期。")
+            st.caption("💡 橙色虚线是全球经济的‘重力平衡线’，只有站上此线，增长才具有持续性。")
 
-           
-        # 2. 信用利差模块 (升级为曲线版)
         with r2:
+            # 信用利差图表 (保持之前的 bps 逻辑)
             st.metric("高收益债利差 (Spread)", f"{latest['spread']:.0f} bps", 
                       f"评分: {score_linear(latest['spread'],300,600,10,True):.1f}/10")
             
-            # 使用 Plotly 画带警戒线的 Spread 曲线
             fig_spread = go.Figure()
             fig_spread.add_trace(go.Scatter(x=df.index[-120:], y=df['spread'].tail(120), 
                                           name="利差趋势", line=dict(color='#FF3131', width=3)))
-            
-            # 加入 500bps 警戒红线
+            # 为了区分，我们将利差的警戒线改为浅灰色或深红色，防止与铜金比的橙色线混淆
             fig_spread.add_shape(type="line", x0=df.index[-120], x1=df.index[-1], y0=500, y1=500,
-                                line=dict(color="orange", width=2, dash="dash"))
+                                line=dict(color="#666", width=2, dash="dot"))
             
-            fig_spread.update_layout(height=250, template="plotly_dark", 
-                                     margin=dict(l=10, r=10, t=10, b=10),
-                                     yaxis=dict(title="Basis Points (bps)", gridcolor="#333"))
+            fig_spread.update_layout(height=300, template="plotly_dark", margin=dict(l=10, r=10, t=10, b=10))
             st.plotly_chart(fig_spread, use_container_width=True)
-            st.caption("注：橙色虚线(500bps)为警戒线。突破该线通常意味着系统性信用风险爆发。")
    
     with tabs[3]:
         st.subheader("📊 系统验证 (GSMI vs Nasdaq 周度版)")
