@@ -241,11 +241,32 @@ try:
     with tabs[2]:
         st.subheader("🏗️ 现实增长与信用防线")
         r1, r2 = st.columns(2)
-        # --- 修正点：在此加入分数显示 ---
-        r1.metric("铜金比趋势", f"{latest['cg_ratio']:.4f}", f"评分: {s_cg_latest}/15 | {'高于200MA' if latest['cg_ratio'] > cg_ma_last else '低于200MA'}")
-        r2.metric("高收益债利差", f"{latest['spread']:.0f} bps", f"评分: {score_linear(latest['spread'],300,600,10,True):.1f}/10")
-        st.area_chart(df['cg_ratio'].tail(120), height=250)
-
+        
+        # 1. 铜金比模块 (保持原样)
+        with r1:
+            st.metric("铜金比趋势", f"{latest['cg_ratio']:.4f}", f"评分: {s_cg_latest}/15")
+            st.area_chart(df['cg_ratio'].tail(120), height=250)
+            
+        # 2. 信用利差模块 (升级为曲线版)
+        with r2:
+            st.metric("高收益债利差 (Spread)", f"{latest['spread']:.0f} bps", 
+                      f"评分: {score_linear(latest['spread'],300,600,10,True):.1f}/10")
+            
+            # 使用 Plotly 画带警戒线的 Spread 曲线
+            fig_spread = go.Figure()
+            fig_spread.add_trace(go.Scatter(x=df.index[-120:], y=df['spread'].tail(120), 
+                                          name="利差趋势", line=dict(color='#FF3131', width=3)))
+            
+            # 加入 500bps 警戒红线
+            fig_spread.add_shape(type="line", x0=df.index[-120], x1=df.index[-1], y0=500, y1=500,
+                                line=dict(color="orange", width=2, dash="dash"))
+            
+            fig_spread.update_layout(height=250, template="plotly_dark", 
+                                     margin=dict(l=10, r=10, t=10, b=10),
+                                     yaxis=dict(title="Basis Points (bps)", gridcolor="#333"))
+            st.plotly_chart(fig_spread, use_container_width=True)
+            st.caption("注：橙色虚线(500bps)为警戒线。突破该线通常意味着系统性信用风险爆发。")
+   
     with tabs[3]:
         st.subheader("📊 系统验证 (GSMI vs Nasdaq 周度版)")
         df_w = df.resample('W-FRI').last().dropna(subset=['gsmi_score', 'qqq'])
