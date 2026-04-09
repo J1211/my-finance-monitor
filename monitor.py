@@ -222,7 +222,7 @@ try:
         fig_nl.update_layout(height=350, template="plotly_dark", yaxis=dict(title="NL (T)"), yaxis2=dict(overlaying="y", side="right", showgrid=False))
         st.plotly_chart(fig_nl, use_container_width=True)
 
-        st.markdown(f"[CESI花旗惊奇指数](https://www.macromicro.me/collections/34/us-stock-relative/55674/us-citi-surprise-index-earnings-revision)")
+        st.markdown(f"[CESI花旗惊奇指数-TIPS前瞻](https://www.macromicro.me/collections/34/us-stock-relative/55674/us-citi-surprise-index-earnings-revision)")
         
     with tabs[1]:
         st.subheader("🧠 情绪与脉搏 (BTC 28日情绪分布)")
