@@ -28,8 +28,8 @@ target_status = st.sidebar.radio("该板块目前拥挤度", ["冷清/低配", "
 # --- 月度手动更新区 ---
 DEFAULT_FMS_CASH = 4.4  
 DEFAULT_FMS_DATE = datetime(2026, 3, 13) 
-crowded_options = ["美股大盘科技", "做多美元", "做空中国股票", "做多国债", "做多黄金", "其他"]
-current_most_crowded = "做多黄金" 
+crowded_options = ["美股大盘科技", "做多美元", "做空中国股票", "做多国债", "做多黄金", "做多石油/半导体"]
+current_most_crowded = "做多石油/半导体" 
 
 st.sidebar.markdown("---")
 st.sidebar.header("🗳️ BofA FMS 机构调查")
