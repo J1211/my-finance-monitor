@@ -26,8 +26,8 @@ target_name = st.sidebar.text_input("关注板块名称", "中概科技龙头")
 target_status = st.sidebar.radio("该板块目前拥挤度", ["冷清/低配", "标配", "极其拥挤"])
 
 # --- 月度手动更新区 ---
-DEFAULT_FMS_CASH = 4.1  
-DEFAULT_FMS_DATE = datetime(2026, 6, 16) 
+DEFAULT_FMS_CASH = 3.6  
+DEFAULT_FMS_DATE = datetime(2026, 7, 15) 
 crowded_options = ["美股大盘科技", "做多美元", "做空中国股票", "做多国债", "做多黄金", "做多半导体"]
 current_most_crowded = "做多半导体" 
 
