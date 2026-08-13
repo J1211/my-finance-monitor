@@ -159,6 +159,27 @@ def calculate_history(df, fms_val):
 
 # --- 4. 执行与展现 ---
 
+def audit_relative_strength(target_ticker, benchmark_ticker='399006.SZ'):
+    # 抓取数据
+    data = yf.download([target_ticker, benchmark_ticker], period="2y")['Close']
+    
+    # 1. 计算原始 RS 比值
+    rs_ratio = data[target_ticker] / data[benchmark_ticker]
+    
+    # 2. 计算 RS 均线
+    rs_20ma = rs_ratio.rolling(20).mean()
+    rs_250ma = rs_ratio.rolling(250).mean()
+    
+    # 3. 计算 RS 斜率 (最近 5 日的变动率)
+    rs_slope = (rs_ratio.pct_change(5) * 100).iloc[-1]
+    
+    # 4. 审计结论输出
+    status = "强 Alpha (吸血中)" if rs_ratio.iloc[-1] > rs_20ma.iloc[-1] else "弱 Beta (失血中)"
+    return rs_ratio, rs_20ma, rs_250ma, rs_slope, status
+
+# 示例调用
+# rs_val, ma20, ma250, slope, msg = audit_relative_strength('561980.SS')
+
 try:
     df_raw = fetch_and_sync_data()
     if df_raw.empty: st.error("数据抓取失败"); st.stop()
