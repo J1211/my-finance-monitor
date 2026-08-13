@@ -269,7 +269,7 @@ try:
 
     with tabs[3]:
         st.subheader("🎯 Alpha 审计 (Relative Strength)")
-        st.caption("逻辑：剥离大盘 Beta，寻找真正的领头羊。基准：创业板指 (399006.SZ)")
+        st.caption("逻辑：剥离大盘 Beta，寻找真正的领头羊。基准：创业板指 (159915.SZ)")
         
         # 允许用户输入想要审计的标的
         audit_ticker = st.text_input("输入要审计的 ETF 代码 (如 561980.SS 或 159848.SZ)", "561980.SS")
