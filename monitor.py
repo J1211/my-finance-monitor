@@ -6,26 +6,27 @@ import plotly.graph_objects as go
 from datetime import datetime, timedelta
 from fredapi import Fred
 
-# --- 1. 界面配置 ---
-st.set_page_config(page_title="GSMI Tactical | 宏观精密监控", layout="wide")
+# --- 1. 界面配置与人格设定 ---
+st.set_page_config(page_title="GSMI Tactical | 首席风险官看板", layout="wide")
 
 st.markdown("""
     <style>
     .main { background-color: #0e1117; }
-    div[data-testid="stMetricValue"] { font-size: 30px; font-weight: bold; color: #00ffcc; }
+    div[data-testid="stMetricValue"] { font-size: 28px; font-weight: bold; color: #00ffcc; }
     .standard-text { color: #aaa; font-size: 14px; margin-top: -10px; margin-bottom: 10px; font-weight: bold; }
     .quadrant-box { padding: 12px; border-radius: 5px; border: 1px solid #333; background-color: #1a1c24; text-align: center; min-height: 70px;}
     </style>
     """, unsafe_allow_html=True)
 
 st.title("🏹 GSMI 全球聪明钱监控与验证系统")
+st.caption("角色设定：顶级对冲基金 CRO | 核心原则：数据优先、反向审计、物理一致性")
 
-# --- 2. 侧边栏配置 ---
+# --- 2. 侧边栏配置 (先定义变量防止逻辑断裂) ---
 st.sidebar.header("🛠️ 核心参数配置")
-target_name = st.sidebar.text_input("关注板块名称", "中概科技龙头")
+target_name = st.sidebar.text_input("关注板块名称", "中国 AI 物理基建")
 target_status = st.sidebar.radio("该板块目前拥挤度", ["冷清/低配", "标配", "极其拥挤"])
 
-# --- 月度手动更新区 ---
+# --- 月度手动更新区 (FMS 调查) ---
 DEFAULT_FMS_CASH = 3.6  
 DEFAULT_FMS_DATE = datetime(2026, 7, 15) 
 crowded_options = ["美股大盘科技", "做多美元", "做空中国股票", "做多国债", "做多黄金", "做多半导体"]
@@ -41,35 +42,18 @@ st.sidebar.markdown("---")
 st.sidebar.header("🏦 财政部 TGA 预测配置")
 tga_target = st.sidebar.number_input("本季末 TGA 余额目标 (十亿$)", value=950, step=50)
 
-st.sidebar.markdown("---")
-with st.sidebar.expander("📖 GSMI 评分规则细则"):
-    st.markdown("""
-    **1. 核心货币 (45分):**  
-    - NL > 4周均线 (+15)  
-    - NL 本周环比增加 (+10)  
-    - TIPS 0.5%->2.5% (20分线性)  
-    **2. 全球汇率 (15分):**  
-    - DXY 98->108 (15分线性)  
-    **3. 机构情绪 (15分):**  
-    - FMS 6.0%->3.5% (15分线性)  
-    **4. 宏观现实 (25分):**  
-    - 铜金比 > 200日线 (+10)  
-    - 铜金比 近5日向上 (+5)  
-    - 利差 300->600bps (10分线性)
-    """)
-
 if "fred_api_key" in st.secrets:
     fred_key = st.secrets["fred_api_key"]
 else:
     fred_key = st.sidebar.text_input("FRED API Key", type="password")
 
 if not fred_key:
-    st.warning("请在侧边栏配置 FRED API Key。")
+    st.warning("⚠️ 请在侧边栏配置 FRED API Key 以激活宏观审计。")
     st.stop()
 
 fred = Fred(api_key=fred_key)
 
-# --- 3. 数据处理函数 ---
+# --- 3. 核心审计函数 ---
 
 def score_linear(val, min_val, max_val, max_score, reverse=False):
     if not reverse:
@@ -81,7 +65,7 @@ def score_linear(val, min_val, max_val, max_score, reverse=False):
 def get_tga_forecast(curr_tga_billion, target_val):
     today = datetime.now()
     m, d = today.month, today.day
-    msg, risk = "⚪ 【平稳周期】目前无重大税收节点，重点关注目标回归。", "Normal"
+    msg, risk = "⚪ 【平稳周期】目前无重大税收节点，关注目标回归。", "Normal"
     if m == 4 and 10 <= d <= 22: msg, risk = "🚨 【年度吸水期】个人税高峰，NL面临强压。", "High"
     elif m in [6, 9, 12] and 12 <= d <= 20: msg, risk = "🟠 【季中吸水期】企业预缴税，NL承压。", "High"
     elif 13 <= d <= 18: msg, risk = "🟢 【利息释放期】国债付息，利好流动性修复。", "Low"
@@ -93,14 +77,20 @@ def get_tga_forecast(curr_tga_billion, target_val):
 def fetch_and_sync_data():
     end = datetime.now()
     start = end - timedelta(days=500)
-    
-    def safe_get_yf(ticker):
+    status_report = {}
+
+    def safe_get_yf(ticker, name):
         try:
             df = yf.download(ticker, start=start, end=end, progress=False)
-            if df is None or df.empty: return pd.Series(dtype='float64')
+            if df is None or df.empty: 
+                status_report[name] = "❌ 抓取失败"
+                return pd.Series(dtype='float64')
             data = df['Close'].iloc[:, 0] if isinstance(df.columns, pd.MultiIndex) else df['Close']
+            status_report[name] = "✅ 成功"
             return data.ffill()
-        except: return pd.Series(dtype='float64')
+        except:
+            status_report[name] = "❌ 错误"
+            return pd.Series(dtype='float64')
 
     data_dict = {}
     try:
@@ -109,28 +99,29 @@ def fetch_and_sync_data():
         data_dict['assets'] = fred.get_series('WALCL', start, end)
         data_dict['tga'] = fred.get_series('WTREGEN', start, end)
         data_dict['rrp'] = fred.get_series('RRPONTSYD', start, end)
-    except: pass
+        data_dict['sofr'] = fred.get_series('SOFR', start, end)
+        data_dict['iorb'] = fred.get_series('IORB', start, end)
+        status_report["FRED 数据源"] = "✅ 成功"
+    except: status_report["FRED 数据源"] = "❌ 失败 (检查 Key)"
 
-    dxy_raw = safe_get_yf("DX-Y.NYB")
-    if dxy_raw.empty or dxy_raw.iloc[-1] < 50:
-        uup = safe_get_yf("UUP")
-        data_dict['dxy'] = uup * 3.68 if not uup.empty else pd.Series(dtype='float64')
-    else: data_dict['dxy'] = dxy_raw
-
-    data_dict['copper'] = safe_get_yf("HG=F")
-    data_dict['gold'] = safe_get_yf("GC=F")
-    data_dict['hkd'] = safe_get_yf("HKD=X")
-    data_dict['hsi'] = safe_get_yf("^HSI")
-    data_dict['as300'] = safe_get_yf("000300.SS")
-    data_dict['btc'] = safe_get_yf("BTC-USD")
-    data_dict['qqq'] = safe_get_yf("QQQ")
-    data_dict['chinext'] = safe_get_yf("399006.SZ") # 创业板指作为 RS 基准
+    dxy_raw = safe_get_yf("DX-Y.NYB", "DXY指数")
+    if dxy_raw.empty: dxy_raw = safe_get_yf("UUP", "DXY备用") * 3.68
+    data_dict['dxy'] = dxy_raw
+    data_dict['copper'] = safe_get_yf("HG=F", "铜期货")
+    data_dict['gold'] = safe_get_yf("GC=F", "黄金期货")
+    data_dict['hkd'] = safe_get_yf("HKD=X", "港元汇率")
+    data_dict['hsi'] = safe_get_yf("^HSI", "恒生指数")
+    data_dict['as300'] = safe_get_yf("000300.SS", "沪深300")
+    data_dict['btc'] = safe_get_yf("BTC-USD", "比特币")
+    data_dict['qqq'] = safe_get_yf("QQQ", "纳斯达克100")
+    data_dict['chinext'] = safe_get_yf("399006.SZ", "创业板指")
 
     df = pd.DataFrame(data_dict).ffill().dropna()
     if not df.empty:
         df['nl'] = (df['assets'] - df['tga'] - df['rrp']) / 1000000
         df['cg_ratio'] = df['copper'] / df['gold']
-    return df
+        df['sofr_spread'] = (df['sofr'] - df['iorb']) * 100 # 转为 bps
+    return df, status_report
 
 def calculate_history(df, fms_val):
     if df.empty: return df
@@ -142,9 +133,7 @@ def calculate_history(df, fms_val):
     cg_ma200 = df['cg_ratio'].rolling(200).mean()
     
     for i in range(len(df)):
-        if i < 20:
-            gsmi_history.append(np.nan)
-            continue
+        if i < 20: gsmi_history.append(np.nan); continue
         s_nl = (15 if df['nl'].iloc[i] > nl_ma4.iloc[i] else 0) + (10 if df['nl'].iloc[i] > df['nl'].iloc[i-5] else 0)
         s_tips = score_linear(df['tips'].iloc[i], 0.5, 2.5, 20, reverse=True)
         s_dxy = score_linear(df['dxy'].iloc[i], 98, 108, 15, reverse=True)
@@ -156,29 +145,28 @@ def calculate_history(df, fms_val):
     df['gsmi_score'] = gsmi_history
     return df
 
-# --- 4. 执行逻辑 ---
+# --- 4. 逻辑执行 ---
 
 try:
-    df_raw = fetch_and_sync_data()
+    df_raw, report = fetch_and_sync_data()
     if df_raw.empty:
-        st.error("❌ 无法获取完整宏观数据，请检查 API Key 或网络。")
+        st.error("❌ 无法获取完整宏观数据。诊断报告：")
+        st.write(report)
         st.stop()
         
     df = calculate_history(df_raw, fms_cash)
     latest = df.iloc[-1]
-    gsmi_total = latest['gsmi_score']
-
+    
     # 计算最新单项分
     nl_ma_last = df['nl'].rolling(20).mean().iloc[-1]
     s_nl_latest = (15 if latest['nl'] > nl_ma_last else 0) + (10 if latest['nl'] > df['nl'].iloc[-6] else 0)
-    cg_ma_last = df['cg_ratio'].rolling(200).mean().iloc[-1]
-    s_cg_latest = (10 if latest['cg_ratio'] > cg_ma_last else 0) + (5 if latest['cg_ratio'] > df['cg_ratio'].iloc[-10:-5].mean() else 0)
+    s_cg_latest = (10 if latest['cg_ratio'] > df['cg_ratio'].rolling(200).mean().iloc[-1] else 0) + (5 if latest['cg_ratio'] > df['cg_ratio'].iloc[-10:-5].mean() else 0)
 
     # --- 5. UI 展示 ---
     c1, c2 = st.columns([2, 1])
     with c1:
         st.plotly_chart(go.Figure(go.Indicator(
-            mode = "gauge+number", value = gsmi_total,
+            mode = "gauge+number", value = latest['gsmi_score'],
             title = {'text': f"GSMI 战术总分 ({df.index[-1].strftime('%m-%d')})", 'font': {'size': 20}},
             gauge = {'axis': {'range': [0, 100]}, 'bar': {'color': "#00ffcc"},
                      'steps': [{'range': [0, 40], 'color': "#441111"}, {'range': [40, 60], 'color': "#444411"},
@@ -191,6 +179,9 @@ try:
         st.markdown(f"**关注目标: {target_name}**")
         st.title(t_map.get(target_status, "🟡 中性观望"))
         st.warning(f"FMS 最拥挤交易: {fms_crowded}")
+        sofr_val = latest['sofr_spread']
+        if sofr_val > 0: st.error(f"⚠️ 系统血压异常: SOFR-IORB {sofr_val:+.1f} bps")
+        else: st.success(f"✅ 系统血压正常: SOFR-IORB {sofr_val:+.1f} bps")
 
     st.markdown("---")
     tabs = st.tabs(["💧 流动性水源", "🧠 情绪与购买力", "🏗️ 现实与防线", "🎯 Alpha 审计 (RS)", "📊 系统验证"])
@@ -269,46 +260,31 @@ try:
 
     with tabs[3]:
         st.subheader("🎯 Alpha 审计 (Relative Strength)")
-        st.caption("逻辑：剥离大盘 Beta，寻找真正的领头羊。基准：创业板指 (159915.SZ)")
-        
-        # 允许用户输入想要审计的标的
         audit_ticker = st.text_input("输入要审计的 ETF 代码 (如 561980.SS 或 159848.SZ)", "561980.SS")
-        
         if audit_ticker:
             try:
-                # 抓取审计标的数据
                 audit_data = yf.download(audit_ticker, start=df.index[0], end=df.index[-1], progress=False)
                 if not audit_data.empty:
                     audit_close = audit_data['Close'].iloc[:, 0] if isinstance(audit_data.columns, pd.MultiIndex) else audit_data['Close']
-                    # 对齐基准数据 (创业板指)
                     rs_df = pd.DataFrame({'target': audit_close, 'base': df['chinext']}).ffill().dropna()
                     rs_ratio = rs_df['target'] / rs_df['base']
-                    
-                    # 计算 RS 均线
                     rs_20ma = rs_ratio.rolling(20).mean()
                     rs_250ma = rs_ratio.rolling(250).mean()
-                    
-                    # 计算斜率
                     curr_rs = rs_ratio.iloc[-1]
-                    prev_rs = rs_ratio.iloc[-6] # 5天前
-                    rs_slope = (curr_rs / prev_rs - 1) * 100
+                    rs_slope = (curr_rs / rs_ratio.iloc[-6] - 1) * 100
                     
-                    # UI 展示
                     col_rs1, col_rs2 = st.columns(2)
                     with col_rs1:
-                        rs_status = "🔥 强 Alpha (加速中)" if curr_rs > rs_20ma.iloc[-1] else "❄️ 弱 Beta (掉队中)"
                         st.metric(f"{audit_ticker} 相对强度", f"{curr_rs:.6f}", f"5日斜率: {rs_slope:+.2f}%")
-                        st.write(f"**当前状态：{rs_status}**")
+                        st.write(f"**状态：{'🔥 强 Alpha' if curr_rs > rs_20ma.iloc[-1] else '❄️ 弱 Beta'}**")
                     
                     fig_rs = go.Figure()
                     fig_rs.add_trace(go.Scatter(x=rs_ratio.index[-250:], y=rs_ratio.values[-250:], name="RS 曲线", line=dict(color='#00ffcc', width=3)))
-                    fig_rs.add_trace(go.Scatter(x=rs_20ma.index[-250:], y=rs_20ma.values[-250:], name="RS 20MA (战术线)", line=dict(color='white', width=1, dash='dot')))
-                    fig_rs.add_trace(go.Scatter(x=rs_250ma.index[-250:], y=rs_250ma.values[-250:], name="RS 250MA (战略线)", line=dict(color='orange', width=2, dash='dash')))
-                    fig_rs.update_layout(height=400, template="plotly_dark", title=f"{audit_ticker} vs 创业板指 RS 审计", legend=dict(orientation="h", y=1.1))
+                    fig_rs.add_trace(go.Scatter(x=rs_20ma.index[-250:], y=rs_20ma.values[-250:], name="RS 20MA", line=dict(color='white', width=1, dash='dot')))
+                    fig_rs.add_trace(go.Scatter(x=rs_250ma.index[-250:], y=rs_250ma.values[-250:], name="RS 250MA", line=dict(color='orange', width=2, dash='dash')))
+                    fig_rs.update_layout(height=400, template="plotly_dark", legend=dict(orientation="h", y=1.1))
                     st.plotly_chart(fig_rs, use_container_width=True)
-                    st.info("💡 判据：RS 曲线在 250MA (橙色线) 之上代表长周期反转；在 20MA (白色点线) 之上代表短周期爆发。")
-            except Exception as e:
-                st.warning(f"无法审计该标的: {e}")
+            except: st.warning("无法审计该标的，请检查代码格式。")
 
     with tabs[4]:
         st.subheader("📊 系统验证 (GSMI vs Nasdaq 周度版)")
