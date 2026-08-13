@@ -48,13 +48,10 @@ with st.sidebar.expander("📖 GSMI 评分规则细则"):
     - NL > 4周均线 (+15)  
     - NL 本周环比增加 (+10)  
     - TIPS 0.5%->2.5% (20分线性)  
-    
     **2. 全球汇率 (15分):**  
     - DXY 98->108 (15分线性)  
-    
     **3. 机构情绪 (15分):**  
     - FMS 6.0%->3.5% (15分线性)  
-    
     **4. 宏观现实 (25分):**  
     - 铜金比 > 200日线 (+10)  
     - 铜金比 近5日向上 (+5)  
@@ -101,11 +98,7 @@ def fetch_and_sync_data():
         try:
             df = yf.download(ticker, start=start, end=end, progress=False)
             if df is None or df.empty: return pd.Series(dtype='float64')
-            # 核心修正：处理 yfinance 的 MultiIndex
-            if isinstance(df.columns, pd.MultiIndex):
-                data = df['Close'].iloc[:, 0]
-            else:
-                data = df['Close']
+            data = df['Close'].iloc[:, 0] if isinstance(df.columns, pd.MultiIndex) else df['Close']
             return data.ffill()
         except: return pd.Series(dtype='float64')
 
@@ -121,10 +114,8 @@ def fetch_and_sync_data():
     dxy_raw = safe_get_yf("DX-Y.NYB")
     if dxy_raw.empty or dxy_raw.iloc[-1] < 50:
         uup = safe_get_yf("UUP")
-        # 修正：使用更精确的 3.68 系数
         data_dict['dxy'] = uup * 3.68 if not uup.empty else pd.Series(dtype='float64')
-    else:
-        data_dict['dxy'] = dxy_raw
+    else: data_dict['dxy'] = dxy_raw
 
     data_dict['copper'] = safe_get_yf("HG=F")
     data_dict['gold'] = safe_get_yf("GC=F")
@@ -133,8 +124,8 @@ def fetch_and_sync_data():
     data_dict['as300'] = safe_get_yf("000300.SS")
     data_dict['btc'] = safe_get_yf("BTC-USD")
     data_dict['qqq'] = safe_get_yf("QQQ")
+    data_dict['chinext'] = safe_get_yf("399006.SZ") # 创业板指作为 RS 基准
 
-    # 核心修正：在 dropna 前确保关键列存在
     df = pd.DataFrame(data_dict).ffill().dropna()
     if not df.empty:
         df['nl'] = (df['assets'] - df['tga'] - df['rrp']) / 1000000
@@ -143,12 +134,8 @@ def fetch_and_sync_data():
 
 def calculate_history(df, fms_val):
     if df.empty: return df
-    
-    # 修正：将利差从百分比转换为基点 (bps)
-    if 'spread' in df.columns:
-        # 只有当数值明显是百分比格式时才转换
-        if df['spread'].max() < 50:
-            df['spread'] = df['spread'] * 100
+    if 'spread' in df.columns and df['spread'].max() < 50:
+        df['spread'] = df['spread'] * 100
 
     gsmi_history = []
     nl_ma4 = df['nl'].rolling(20).mean()
@@ -158,23 +145,13 @@ def calculate_history(df, fms_val):
         if i < 20:
             gsmi_history.append(np.nan)
             continue
-        
-        # 1. NL (25分)
         s_nl = (15 if df['nl'].iloc[i] > nl_ma4.iloc[i] else 0) + (10 if df['nl'].iloc[i] > df['nl'].iloc[i-5] else 0)
-        # 2. TIPS (20分)
         s_tips = score_linear(df['tips'].iloc[i], 0.5, 2.5, 20, reverse=True)
-        # 3. DXY (15分)
         s_dxy = score_linear(df['dxy'].iloc[i], 98, 108, 15, reverse=True)
-        # 4. FMS (15分)
-        s_cash = score_linear(fms_val, 3.5, 6.0, 15, reverse=False)
-        # 5. CG (15分)
-        s_cg_base = (10 if df['cg_ratio'].iloc[i] > cg_ma200.iloc[i] else 0) if i > 200 else 0
-        s_cg_momo = 5 if df['cg_ratio'].iloc[i] > df['cg_ratio'].iloc[i-10:i-5].mean() else 0
-        s_cg = s_cg_base + s_cg_momo
-        # 6. Spread (10分)
+        s_fms = score_linear(fms_val, 3.5, 6.0, 15, reverse=False)
+        s_cg = ((10 if df['cg_ratio'].iloc[i] > cg_ma200.iloc[i] else 0) if i > 200 else 0) + (5 if df['cg_ratio'].iloc[i] > df['cg_ratio'].iloc[i-10:i-5].mean() else 0)
         s_spread = score_linear(df['spread'].iloc[i], 300, 600, 10, reverse=True)
-        
-        gsmi_history.append(s_nl + s_tips + s_dxy + s_cash + s_cg + s_spread)
+        gsmi_history.append(s_nl + s_tips + s_dxy + s_fms + s_cg + s_spread)
     
     df['gsmi_score'] = gsmi_history
     return df
@@ -191,7 +168,7 @@ try:
     latest = df.iloc[-1]
     gsmi_total = latest['gsmi_score']
 
-    # 计算最新单项分用于显示
+    # 计算最新单项分
     nl_ma_last = df['nl'].rolling(20).mean().iloc[-1]
     s_nl_latest = (15 if latest['nl'] > nl_ma_last else 0) + (10 if latest['nl'] > df['nl'].iloc[-6] else 0)
     cg_ma_last = df['cg_ratio'].rolling(200).mean().iloc[-1]
@@ -200,15 +177,13 @@ try:
     # --- 5. UI 展示 ---
     c1, c2 = st.columns([2, 1])
     with c1:
-        fig_g = go.Figure(go.Indicator(
+        st.plotly_chart(go.Figure(go.Indicator(
             mode = "gauge+number", value = gsmi_total,
             title = {'text': f"GSMI 战术总分 ({df.index[-1].strftime('%m-%d')})", 'font': {'size': 20}},
             gauge = {'axis': {'range': [0, 100]}, 'bar': {'color': "#00ffcc"},
                      'steps': [{'range': [0, 40], 'color': "#441111"}, {'range': [40, 60], 'color': "#444411"},
                                {'range': [60, 80], 'color': "#114411"}, {'range': [80, 100], 'color': "#006644"}]}
-        ))
-        fig_g.update_layout(height=350, margin=dict(l=30, r=30, t=50, b=20), paper_bgcolor="#0e1117", font={'color': "white"})
-        st.plotly_chart(fig_g, use_container_width=True)
+        )).update_layout(height=350, margin=dict(l=30, r=30, t=50, b=20), paper_bgcolor="#0e1117", font={'color': "white"}), use_container_width=True)
 
     with c2:
         st.subheader("🚨 实时战术预警")
@@ -218,11 +193,10 @@ try:
         st.warning(f"FMS 最拥挤交易: {fms_crowded}")
 
     st.markdown("---")
-    tabs = st.tabs(["💧 流动性水源", "🧠 情绪与购买力", "🏗️ 现实与防线", "📊 系统验证与确认"])
+    tabs = st.tabs(["💧 流动性水源", "🧠 情绪与购买力", "🏗️ 现实与防线", "🎯 Alpha 审计 (RS)", "📊 系统验证"])
 
     with tabs[0]:
         st.subheader("🏦 核心流动性水源 (NL + TIPS + DXY)")
-        # TGA 前瞻
         t_msg, t_gap, t_risk = get_tga_forecast(latest['tga']/1000, tga_target)
         if t_risk == "High": st.error(t_msg)
         elif t_risk == "Low": st.success(t_msg)
@@ -231,7 +205,7 @@ try:
         col_t1, col_t2, col_t3 = st.columns(3)
         col_t1.metric("当前 TGA 余额", f"${latest['tga']/1000:.1f}B")
         col_t2.metric("季末目标位", f"${tga_target}B")
-        col_t3.metric("目标回归缺口", f"{t_gap:+.1f}B", delta_color="normal" if t_gap < 0 else "inverse", help="负缺口代表未来有放水红利")
+        col_t3.metric("目标回归缺口", f"{t_gap:+.1f}B", delta_color="normal" if t_gap < 0 else "inverse")
 
         st.write("---")
         q1, q2, q3, q4 = st.columns(4)
@@ -250,10 +224,9 @@ try:
         fig_nl.add_trace(go.Scatter(x=df.index, y=df['tips'], name="TIPS (%)", line=dict(color='#FF3131', dash='dot'), yaxis="y2"))
         fig_nl.update_layout(height=350, template="plotly_dark", yaxis=dict(title="NL (T)"), yaxis2=dict(overlaying="y", side="right", showgrid=False))
         st.plotly_chart(fig_nl, use_container_width=True)
-        st.markdown(f"[CESI花旗惊奇指数-TIPS前瞻](https://www.macromicro.me/collections/34/us-stock-relative/55674/us-citi-surprise-index-earnings-revision)")
 
     with tabs[1]:
-        st.subheader("🧠 情绪与购买力 (BTC 28日情绪分布)")
+        st.subheader("🧠 情绪与购买力监控")
         e1, e2 = st.columns([1, 2])
         with e1:
             st.metric("FMS 机构现金", f"{fms_cash}%", f"得分: {score_linear(fms_cash,3.5,6.0,15):.1f}/15")
@@ -295,6 +268,49 @@ try:
             st.plotly_chart(fig_spread, use_container_width=True)
 
     with tabs[3]:
+        st.subheader("🎯 Alpha 审计 (Relative Strength)")
+        st.caption("逻辑：剥离大盘 Beta，寻找真正的领头羊。基准：创业板指 (399006.SZ)")
+        
+        # 允许用户输入想要审计的标的
+        audit_ticker = st.text_input("输入要审计的 ETF 代码 (如 561980.SS 或 159848.SZ)", "561980.SS")
+        
+        if audit_ticker:
+            try:
+                # 抓取审计标的数据
+                audit_data = yf.download(audit_ticker, start=df.index[0], end=df.index[-1], progress=False)
+                if not audit_data.empty:
+                    audit_close = audit_data['Close'].iloc[:, 0] if isinstance(audit_data.columns, pd.MultiIndex) else audit_data['Close']
+                    # 对齐基准数据 (创业板指)
+                    rs_df = pd.DataFrame({'target': audit_close, 'base': df['chinext']}).ffill().dropna()
+                    rs_ratio = rs_df['target'] / rs_df['base']
+                    
+                    # 计算 RS 均线
+                    rs_20ma = rs_ratio.rolling(20).mean()
+                    rs_250ma = rs_ratio.rolling(250).mean()
+                    
+                    # 计算斜率
+                    curr_rs = rs_ratio.iloc[-1]
+                    prev_rs = rs_ratio.iloc[-6] # 5天前
+                    rs_slope = (curr_rs / prev_rs - 1) * 100
+                    
+                    # UI 展示
+                    col_rs1, col_rs2 = st.columns(2)
+                    with col_rs1:
+                        rs_status = "🔥 强 Alpha (加速中)" if curr_rs > rs_20ma.iloc[-1] else "❄️ 弱 Beta (掉队中)"
+                        st.metric(f"{audit_ticker} 相对强度", f"{curr_rs:.6f}", f"5日斜率: {rs_slope:+.2f}%")
+                        st.write(f"**当前状态：{rs_status}**")
+                    
+                    fig_rs = go.Figure()
+                    fig_rs.add_trace(go.Scatter(x=rs_ratio.index[-250:], y=rs_ratio.values[-250:], name="RS 曲线", line=dict(color='#00ffcc', width=3)))
+                    fig_rs.add_trace(go.Scatter(x=rs_20ma.index[-250:], y=rs_20ma.values[-250:], name="RS 20MA (战术线)", line=dict(color='white', width=1, dash='dot')))
+                    fig_rs.add_trace(go.Scatter(x=rs_250ma.index[-250:], y=rs_250ma.values[-250:], name="RS 250MA (战略线)", line=dict(color='orange', width=2, dash='dash')))
+                    fig_rs.update_layout(height=400, template="plotly_dark", title=f"{audit_ticker} vs 创业板指 RS 审计", legend=dict(orientation="h", y=1.1))
+                    st.plotly_chart(fig_rs, use_container_width=True)
+                    st.info("💡 判据：RS 曲线在 250MA (橙色线) 之上代表长周期反转；在 20MA (白色点线) 之上代表短周期爆发。")
+            except Exception as e:
+                st.warning(f"无法审计该标的: {e}")
+
+    with tabs[4]:
         st.subheader("📊 系统验证 (GSMI vs Nasdaq 周度版)")
         df_w = df.resample('W-FRI').last().dropna(subset=['gsmi_score', 'qqq'])
         norm_q = (df_w['qqq'] / df_w['qqq'].iloc[0]) * 100
@@ -317,7 +333,7 @@ try:
             st.slider("手动录入：大市沽空比率 (%)", 5.0, 35.0, 16.5, 0.1)
 
 except Exception as e:
-    st.error(f"系统运行错误: {e}")
+    st.error(f"系统错误: {e}")
 
 st.markdown("---")
 st.caption("GSMI Tactical | 45% 核心货币 (NL+TIPS) + 15% 全球汇率 (DXY) + 15% 机构情绪 (FMS) + 25% 宏观现实 (CuAu+Spread)")
