@@ -114,7 +114,7 @@ def fetch_and_sync_data():
     data_dict['as300'] = safe_get_yf("000300.SS", "沪深300")
     data_dict['btc'] = safe_get_yf("BTC-USD", "比特币")
     data_dict['qqq'] = safe_get_yf("QQQ", "纳斯达克100")
-    data_dict['chinext'] = safe_get_yf("399006.SZ", "创业板指")
+    data_dict['chinext'] = safe_get_yf("159915.SZ", "创业板指")
 
     df = pd.DataFrame(data_dict).ffill().dropna()
     if not df.empty:
