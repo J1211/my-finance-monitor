@@ -114,7 +114,7 @@ def fetch_and_sync_data():
     data_dict['as300'] = safe_get_yf("000300.SS", "沪深300")
     data_dict['btc'] = safe_get_yf("BTC-USD", "比特币")
     data_dict['qqq'] = safe_get_yf("QQQ", "纳斯达克100")
-    data_dict['chinext'] = safe_get_yf("159915.SZ", "创业板ETF") # 使用ETF作为基准更稳定
+    data_dict['chinext'] = safe_get_yf("159915.SZ", "创业板ETF")
 
     df = pd.DataFrame(data_dict).ffill().dropna()
     if not df.empty:
@@ -198,6 +198,40 @@ try:
         fig_nl.update_layout(height=350, template="plotly_dark", yaxis=dict(title="NL (T)"), yaxis2=dict(overlaying="y", side="right", showgrid=False))
         st.plotly_chart(fig_nl, use_container_width=True)
 
+    with tabs[1]:
+        st.subheader("🧠 情绪与购买力监控")
+        if 'btc' in df.columns:
+            e1, e2 = st.columns([1, 2])
+            with e1:
+                st.metric("FMS 机构现金", f"{fms_cash}%", f"得分: {score_linear(fms_cash,3.5,6.0,15):.1f}/15")
+                st.write("---")
+                # 健壮的 BTC 收益率计算
+                btc_ret = df['btc'].pct_change().dropna() * 100
+                if not btc_ret.empty:
+                    last_28d = btc_ret.tail(28)
+                    pos_days = len(last_28d[last_28d > 0])
+                    st.write("**BTC 28日情绪扫描**")
+                    st.caption(f"📈 上涨天数: {pos_days} | 📉 下跌天数: {len(last_28d)-pos_days}")
+                    if pos_days >= 18: st.success("🔥 投机情绪极度活跃")
+                    elif pos_days <= 10: st.error("❄️ 流动性极度低迷")
+                    else: st.info("⚖️ 风险偏好震荡中")
+                else:
+                    st.warning("BTC 收益率数据不足")
+            with e2:
+                if not btc_ret.empty:
+                    fig_btc_dist = go.Figure(go.Bar(
+                        x=last_28d.index, 
+                        y=last_28d.values, 
+                        marker_color=['#00ffcc' if x>0 else '#FF3131' for x in last_28d]
+                    ))
+                    fig_btc_dist.update_layout(height=250, template="plotly_dark", title="BTC 28日逐日波动脉搏 (%)", margin=dict(l=10, r=10, t=40, b=10))
+                    st.plotly_chart(fig_btc_dist, use_container_width=True)
+            
+            st.write("**BTC 120日宏观趋势 (金丝雀价格线)**")
+            st.line_chart(df['btc'].tail(120), height=200)
+        else:
+            st.error("未抓取到比特币数据，请检查网络或代码。")
+
     with tabs[2]:
         st.subheader("🏗️ 现实增长与信用防线")
         r1, r2 = st.columns(2)
@@ -226,54 +260,65 @@ try:
             try:
                 audit_data = yf.download(audit_ticker, start=df.index[0] - timedelta(days=10), end=df.index[-1], progress=False)
                 if not audit_data.empty:
-                    # 1. 计算 VR (量比)
-                    # 逻辑：今日成交量 / 过去5日平均成交量
                     vol_col = audit_data['Volume'].iloc[:, 0] if isinstance(audit_data.columns, pd.MultiIndex) else audit_data['Volume']
                     curr_vol = vol_col.iloc[-1]
                     avg_vol = vol_col.iloc[-6:-1].mean()
                     vr = curr_vol / avg_vol if avg_vol > 0 else 0
                     
-                    # 2. 计算 RS (相对强度)
                     audit_close = audit_data['Close'].iloc[:, 0] if isinstance(audit_data.columns, pd.MultiIndex) else audit_data['Close']
                     rs_df = pd.DataFrame({'target': audit_close, 'base': df['chinext']}).ffill().dropna()
-                    rs_ratio = rs_df['target'] / rs_df['base']
-                    rs_20ma = rs_ratio.rolling(20).mean()
-                    rs_250ma = rs_ratio.rolling(250).mean()
-                    
-                    # 3. UI 展示
-                    v_col1, v_col2, v_col3 = st.columns(3)
-                    with v_col1:
-                        vr_status = "🔥 能量爆发" if vr > 1.5 else ("❄️ 动能枯竭" if vr < 0.8 else "⚖️ 平稳")
-                        st.metric("量能倍率 (VR)", f"{vr:.2f}", vr_status)
-                    with v_col2:
-                        curr_rs = rs_ratio.iloc[-1]
-                        rs_slope = (curr_rs / rs_ratio.iloc[-6] - 1) * 100
-                        st.metric("相对强度 (RS)", f"{curr_rs:.6f}", f"5日斜率: {rs_slope:+.2f}%")
-                    with v_col3:
-                        rs_tag = "🔥 强 Alpha" if curr_rs > rs_20ma.iloc[-1] else "❄️ 弱 Beta"
-                        st.write(f"**审计判定：{rs_tag}**")
-                        if rs_ratio.iloc[-1] > rs_250ma.iloc[-1]: st.success("✅ 已站上 250MA (长周期反转)")
-                        else: st.warning("⚠️ 仍在 250MA 下方 (磨底期)")
+                    if not rs_df.empty:
+                        rs_ratio = rs_df['target'] / rs_df['base']
+                        rs_20ma = rs_ratio.rolling(20).mean()
+                        rs_250ma = rs_ratio.rolling(250).mean()
+                        
+                        v_col1, v_col2, v_col3 = st.columns(3)
+                        with v_col1:
+                            vr_status = "🔥 能量爆发" if vr > 1.5 else ("❄️ 动能枯竭" if vr < 0.8 else "⚖️ 平稳")
+                            st.metric("量能倍率 (VR)", f"{vr:.2f}", vr_status)
+                        with v_col2:
+                            curr_rs = rs_ratio.iloc[-1]
+                            rs_slope = (curr_rs / rs_ratio.iloc[-6] - 1) * 100 if len(rs_ratio) > 6 else 0
+                            st.metric("相对强度 (RS)", f"{curr_rs:.6f}", f"5日斜率: {rs_slope:+.2f}%")
+                        with v_col3:
+                            rs_tag = "🔥 强 Alpha" if curr_rs > rs_20ma.iloc[-1] else "❄️ 弱 Beta"
+                            st.write(f"**审计判定：{rs_tag}**")
+                            if rs_ratio.iloc[-1] > rs_250ma.iloc[-1]: st.success("✅ 已站上 250MA (长周期反转)")
+                            else: st.warning("⚠️ 仍在 250MA 下方 (磨底期)")
 
-                    fig_rs = go.Figure()
-                    fig_rs.add_trace(go.Scatter(x=rs_ratio.index[-250:], y=rs_ratio.values[-250:], name="RS 曲线", line=dict(color='#00ffcc', width=3)))
-                    fig_rs.add_trace(go.Scatter(x=rs_20ma.index[-250:], y=rs_20ma.values[-250:], name="20MA (战术线)", line=dict(color='white', width=1, dash='dot')))
-                    fig_rs.add_trace(go.Scatter(x=rs_250ma.index[-250:], y=rs_250ma.values[-250:], name="250MA (战略线)", line=dict(color='orange', width=2, dash='dash')))
-                    fig_rs.update_layout(height=400, template="plotly_dark", legend=dict(orientation="h", y=1.1))
-                    st.plotly_chart(fig_rs, use_container_width=True)
+                        fig_rs = go.Figure()
+                        fig_rs.add_trace(go.Scatter(x=rs_ratio.index[-250:], y=rs_ratio.values[-250:], name="RS 曲线", line=dict(color='#00ffcc', width=3)))
+                        fig_rs.add_trace(go.Scatter(x=rs_20ma.index[-250:], y=rs_20ma.values[-250:], name="RS 20MA", line=dict(color='white', width=1, dash='dot')))
+                        fig_rs.add_trace(go.Scatter(x=rs_250ma.index[-250:], y=rs_250ma.values[-250:], name="RS 250MA", line=dict(color='orange', width=2, dash='dash')))
+                        fig_rs.update_layout(height=400, template="plotly_dark", legend=dict(orientation="h", y=1.1))
+                        st.plotly_chart(fig_rs, use_container_width=True)
             except Exception as e: st.warning(f"审计失败: {e}")
 
     with tabs[4]:
-        st.subheader("📊 系统验证 (GSMI vs Nasdaq)")
+        st.subheader("📊 系统验证 (GSMI vs Nasdaq 周度版)")
         df_w = df.resample('W-FRI').last().dropna(subset=['gsmi_score', 'qqq'])
-        norm_q = (df_w['qqq'] / df_w['qqq'].iloc[0]) * 100
-        fig_v = go.Figure()
-        fig_v.add_trace(go.Scatter(x=df_w.index, y=df_w['gsmi_score'], name="GSMI 评分", line=dict(color='#00ffcc', width=4), mode='lines+markers'))
-        fig_v.add_trace(go.Scatter(x=df_w.index, y=norm_q, name="QQQ (归一化)", line=dict(color='#FFD700', dash='dot'), yaxis="y2"))
-        st.plotly_chart(fig_v.update_layout(height=400, template="plotly_dark", yaxis=dict(title="GSMI", range=[0,100]), yaxis2=dict(overlaying="y", side="right", showgrid=False)), use_container_width=True)
+        if not df_w.empty:
+            norm_q = (df_w['qqq'] / df_w['qqq'].iloc[0]) * 100
+            fig_v = go.Figure()
+            fig_v.add_trace(go.Scatter(x=df_w.index, y=df_w['gsmi_score'], name="GSMI 评分", line=dict(color='#00ffcc', width=4), mode='lines+markers'))
+            fig_v.add_trace(go.Scatter(x=df_w.index, y=norm_q, name="QQQ (归一化)", line=dict(color='#FFD700', dash='dot'), yaxis="y2"))
+            st.plotly_chart(fig_v.update_layout(height=400, template="plotly_dark", yaxis=dict(title="GSMI", range=[0,100]), yaxis2=dict(overlaying="y", side="right", showgrid=False)), use_container_width=True)
+        
+        st.write("---")
+        st.subheader("🌉 最后执行确认")
+        hk1, hk2 = st.columns(2)
+        with hk1:
+            st.metric("港元汇率 (USD/HKD)", f"{latest['hkd']:.4f}", "吸金" if latest['hkd'] < 7.80 else "失血")
+            if len(df) > 20:
+                hsi_perf = (latest['hsi']/df['hsi'].iloc[-20] - 1)*100
+                as300_perf = (latest['as300']/df['as300'].iloc[-20] - 1)*100
+                st.write(f"📊 20日动能差 HSI vs AS300: {hsi_perf - as300_perf:+.2f}%")
+        with hk2:
+            st.markdown(f"[沽空比](http://www.aastocks.com/tc/stocks/market/shortselling/securities-eligible.aspx) | [信贷脉冲](https://www.macromicro.me/collections/31/cn-finance-relative/35559/china-credit-impulse-index) | [M1-M2剪刀差](https://www.macromicro.me/charts/260/cn-china-m1-m2)")
+            st.slider("手动录入：大市沽空比率 (%)", 5.0, 35.0, 16.5, 0.1)
 
 except Exception as e:
-    st.error(f"系统错误: {e}")
+    st.error(f"系统运行中发生错误: {e}")
 
 st.markdown("---")
 st.caption("GSMI Tactical | 45% 核心货币 + 15% 全球汇率 + 15% 机构情绪 + 25% 宏观现实")
