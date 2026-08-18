@@ -245,8 +245,9 @@ try:
 
     with tabs[3]:
         st.subheader("🎯 Alpha 审计 (Relative Strength)")
+        st.caption("逻辑：寻找正在‘吸血’大盘的领头羊。基准：创业板 ETF (159915.SZ)")
         
-        # --- 需求：5行比较列表 ---
+        # --- 5行比较列表 ---
         st.write("### 🚀 5日斜率 (Z轴) 实时对比表")
         input_cols = st.columns(5)
         tickers = []
@@ -274,33 +275,42 @@ try:
             st.table(res_df)
         
         st.write("---")
-        # --- 保留：原本的单项深度查询部分 ---
+        # --- 修正：单项深度审计图表 (补齐斜率和强弱标示) ---
         st.write("### 🔍 单项深度审计图表")
         audit_ticker = st.text_input("输入要详细审计的 ETF 代码(159558.SZ设备/159326.SZ电网/512670.SS空天/515880.SS通信/159566.SZ储能/159530.SZ机器人)", "159558.SZ", key="single_audit")
         if audit_ticker:
             try:
                 audit_data = yf.download(audit_ticker, start=df.index[0] - timedelta(days=10), end=df.index[-1], progress=False)
                 if not audit_data.empty:
-                    # 计算 VR (量比)
+                    # 1. 计算 VR (量比)
                     vol_col = audit_data['Volume'].iloc[:, 0] if isinstance(audit_data.columns, pd.MultiIndex) else audit_data['Volume']
                     curr_vol = vol_col.iloc[-1]
                     avg_vol = vol_col.iloc[-6:-1].mean()
                     vr = curr_vol / avg_vol if avg_vol > 0 else 0
                     
-                    # 计算 RS
+                    # 2. 计算 RS 及其均线
                     audit_close = audit_data['Close'].iloc[:, 0] if isinstance(audit_data.columns, pd.MultiIndex) else audit_data['Close']
                     rs_df = pd.DataFrame({'target': audit_close, 'base': df['chinext']}).ffill().dropna()
                     rs_ratio = rs_df['target'] / rs_df['base']
                     rs_20ma = rs_ratio.rolling(20).mean()
                     rs_250ma = rs_ratio.rolling(250).mean()
                     
+                    # 3. 计算 5日斜率 (Z轴)
+                    curr_rs = rs_ratio.iloc[-1]
+                    prev_rs = rs_ratio.iloc[-6]
+                    rs_slope_single = (curr_rs / prev_rs - 1) * 100
+                    
+                    # 4. UI 展示
                     v_col1, v_col2, v_col3 = st.columns(3)
                     with v_col1:
                         st.metric("量能倍率 (VR)", f"{vr:.2f}", "🔥 爆发" if vr > 1.5 else "⚖️ 平稳")
                     with v_col2:
-                        curr_rs = rs_ratio.iloc[-1]
-                        st.metric("相对强度 (RS)", f"{curr_rs:.6f}")
+                        # 重新加入 5日斜率显示
+                        st.metric("相对强度 (RS)", f"{curr_rs:.6f}", f"5日斜率: {rs_slope_single:+.2f}%")
                     with v_col3:
+                        # 重新加入 Alpha/Beta 强弱判定
+                        rs_tag = "🔥 强 Alpha" if curr_rs > rs_20ma.iloc[-1] else "❄️ 弱 Beta"
+                        st.write(f"**审计判定：{rs_tag}**")
                         if rs_ratio.iloc[-1] > rs_250ma.iloc[-1]: st.success("✅ 已站上 250MA (长周期反转)")
                         else: st.warning("⚠️ 仍在 250MA 下方")
 
