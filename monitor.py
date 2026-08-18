@@ -19,6 +19,7 @@ st.markdown("""
     """, unsafe_allow_html=True)
 
 st.title("🏹 GSMI 全球聪明钱监控与验证系统")
+st.caption("角色设定：顶级对冲基金 CRO | 核心原则：数据优先、反向审计、物理一致性")
 
 # --- 2. 侧边栏配置 ---
 st.sidebar.header("🛠️ 核心参数配置")
@@ -41,7 +42,6 @@ st.sidebar.markdown("---")
 st.sidebar.header("🏦 财政部 TGA 预测配置")
 tga_target = st.sidebar.number_input("本季末 TGA 余额目标 (十亿$)", value=950, step=50)
 
-# --- 需求 1：恢复评分规则细则 ---
 st.sidebar.markdown("---")
 with st.sidebar.expander("📖 GSMI 评分规则细则", expanded=True):
     st.markdown("""
@@ -49,13 +49,10 @@ with st.sidebar.expander("📖 GSMI 评分规则细则", expanded=True):
     - NL > 4周均线 (+15)  
     - NL 本周环比增加 (+10)  
     - TIPS 0.5%->2.5% (20分线性)  
-    
     **2. 全球汇率 (15分):**  
     - DXY 98->108 (15分线性)  
-    
     **3. 机构情绪 (15分):**  
     - FMS 6.0%->3.5% (15分线性)  
-    
     **4. 宏观现实 (25分):**  
     - 铜金比 > 200日线 (+10)  
     - 铜金比 近5日向上 (+5)  
@@ -88,7 +85,7 @@ def get_tga_forecast(curr_tga_billion, target_val):
     msg, risk = "⚪ 【平稳周期】关注目标回归。", "Normal"
     if m == 4 and 10 <= d <= 22: msg, risk = "🚨 【年度吸水期】个人税高峰，NL面临强压。", "High"
     elif m in [6, 9, 12] and 12 <= d <= 20: msg, risk = "🟠 【季中吸水期】企业预缴税，NL承压。", "High"
-    elif 13 <= d <= 18: msg, risk = "🟢 【利息释放期】国债付息，利好流动性。", "Low"
+    elif 13 <= d <= 18: msg, risk = "🟢 【利息释放期】国债付息，利好流动性修复。", "Low"
     elif 1 <= d <= 5: msg, risk = "🔵 【财政支出期】月初支出高峰，水源偏暖。", "Low"
     gap = target_val - curr_tga_billion
     return msg, gap, risk
@@ -126,7 +123,7 @@ def fetch_and_sync_data():
     data_dict['as300'] = safe_get_yf("000300.SS")
     data_dict['btc'] = safe_get_yf("BTC-USD")
     data_dict['qqq'] = safe_get_yf("QQQ")
-    data_dict['chinext'] = safe_get_yf("159915.SZ") # 修正：使用 ETF 作为基准
+    data_dict['chinext'] = safe_get_yf("159915.SZ")
 
     df = pd.DataFrame(data_dict).ffill().dropna()
     if not df.empty:
@@ -160,8 +157,18 @@ def calculate_history(df, fms_val):
 # --- 4. 执行逻辑 ---
 
 try:
-    df = calculate_history(fetch_and_sync_data(), fms_cash)
+    df_raw = fetch_and_sync_data()
+    if df_raw.empty: st.error("数据抓取失败"); st.stop()
+    df = calculate_history(df_raw, fms_cash)
     latest = df.iloc[-1]
+
+    # --- 核心修正：定义所有 UI 变量 ---
+    nl_ma_last = df['nl'].rolling(20).mean().iloc[-1]
+    s_nl_latest = (15 if latest['nl'] > nl_ma_last else 0) + (10 if latest['nl'] > df['nl'].iloc[-6] else 0)
+    
+    cg_ma_last = df['cg_ratio'].rolling(200).mean().iloc[-1]
+    # 修正 s_cg_latest 定义
+    s_cg_latest = (10 if latest['cg_ratio'] > cg_ma_last else 0) + (5 if latest['cg_ratio'] > df['cg_ratio'].iloc[-10:-5].mean() else 0)
 
     # --- 5. UI 展示 ---
     c1, c2 = st.columns([2, 1])
@@ -193,10 +200,6 @@ try:
         elif t_risk == "Low": st.success(t_msg)
         else: st.info(t_msg)
         
-        # --- 需求 2：恢复 NL 变化分数显示 ---
-        nl_ma_last = df['nl'].rolling(20).mean().iloc[-1]
-        s_nl_latest = (15 if latest['nl'] > nl_ma_last else 0) + (10 if latest['nl'] > df['nl'].iloc[-6] else 0)
-        
         col_t1, col_t2, col_t3 = st.columns(3)
         col_t1.metric("净流动性 (NL)", f"${latest['nl']:.2f}T", f"评分: {s_nl_latest}/25 | 周变: {latest['nl'] - df['nl'].iloc[-6]:+.3f}T")
         col_t2.metric("10Y TIPS", f"{latest['tips']:.2f}%", f"评分: {score_linear(latest['tips'],0.5,2.5,20,True):.1f}/20")
@@ -208,46 +211,6 @@ try:
         fig_nl.update_layout(height=350, template="plotly_dark", yaxis=dict(title="NL (T)"), yaxis2=dict(overlaying="y", side="right", showgrid=False))
         st.plotly_chart(fig_nl, use_container_width=True)
 
-    with tabs[3]:
-        st.subheader("🎯 Alpha 审计 (Relative Strength)")
-        st.caption("逻辑：寻找正在‘吸血’大盘的领头羊。基准：创业板 ETF (159915.SZ)")
-        
-        # --- 需求 3：5行比较列表 ---
-        st.write("### 🚀 5日斜率 (Z轴) 实时对比表")
-        
-        # 创建 5 个输入框
-        input_cols = st.columns(5)
-        tickers = []
-        tickers.append(input_cols[0].text_input("标的 1", "561980.SS"))
-        tickers.append(input_cols[1].text_input("标的 2", "159326.SZ"))
-        tickers.append(input_cols[2].text_input("标的 3", "512480.SS"))
-        tickers.append(input_cols[3].text_input("标多 4", "515260.SS"))
-        tickers.append(input_cols[4].text_input("标的 5", "513310.SS"))
-        
-        audit_results = []
-        for t in tickers:
-            if t:
-                try:
-                    t_data = yf.download(t, start=df.index[-30], end=df.index[-1], progress=False)
-                    if not t_data.empty:
-                        t_close = t_data['Close'].iloc[:, 0] if isinstance(t_data.columns, pd.MultiIndex) else t_data['Close']
-                        # 对齐基准
-                        combined = pd.DataFrame({'target': t_close, 'base': df['chinext']}).ffill().dropna()
-                        rs_ratio = combined['target'] / combined['base']
-                        # 计算 5 日斜率
-                        slope = (rs_ratio.iloc[-1] / rs_ratio.iloc[-6] - 1) * 100
-                        audit_results.append({"代码": t, "5日斜率 (%)": round(slope, 2), "状态": "🔥 强 Alpha" if slope > 0 else "❄️ 弱 Beta"})
-                except:
-                    audit_results.append({"代码": t, "5日斜率 (%)": "N/A", "状态": "数据抓取失败"})
-        
-        if audit_results:
-            res_df = pd.DataFrame(audit_results)
-            # 按照斜率降序排列
-            res_df = res_df.sort_values(by="5日斜率 (%)", ascending=False)
-            st.table(res_df)
-            st.info("💡 审计指令：优先配置斜率最陡（正值最大）的标的。若斜率为负，说明正在跑输大盘。")
-
-    # (其余 Tab 2, Tab 4 保持原样...)
     with tabs[1]:
         st.subheader("🧠 情绪与购买力监控")
         btc_ret = df['btc'].pct_change().dropna() * 100
@@ -279,6 +242,37 @@ try:
             fig_spread.add_trace(go.Scatter(x=df.index[-180:], y=[500]*180, name="500bps", line=dict(color='orange', width=2, dash='dash')))
             fig_spread.update_layout(height=300, template="plotly_dark")
             st.plotly_chart(fig_spread, use_container_width=True)
+
+    with tabs[3]:
+        st.subheader("🎯 Alpha 审计 (Relative Strength)")
+        st.caption("逻辑：寻找正在‘吸血’大盘的领头羊。基准：创业板 ETF (159915.SZ)")
+        st.write("### 🚀 5日斜率 (Z轴) 实时对比表")
+        
+        input_cols = st.columns(5)
+        tickers = []
+        tickers.append(input_cols[0].text_input("标的 1", "561980.SS"))
+        tickers.append(input_cols[1].text_input("标的 2", "159326.SZ"))
+        tickers.append(input_cols[2].text_input("标的 3", "512480.SS"))
+        tickers.append(input_cols[3].text_input("标的 4", "515260.SS"))
+        tickers.append(input_cols[4].text_input("标的 5", "513310.SS"))
+        
+        audit_results = []
+        for t in tickers:
+            if t:
+                try:
+                    t_data = yf.download(t, start=df.index[-30], end=df.index[-1], progress=False)
+                    if not t_data.empty:
+                        t_close = t_data['Close'].iloc[:, 0] if isinstance(t_data.columns, pd.MultiIndex) else t_data['Close']
+                        combined = pd.DataFrame({'target': t_close, 'base': df['chinext']}).ffill().dropna()
+                        rs_ratio = combined['target'] / combined['base']
+                        slope = (rs_ratio.iloc[-1] / rs_ratio.iloc[-6] - 1) * 100
+                        audit_results.append({"代码": t, "5日斜率 (%)": round(slope, 2), "状态": "🔥 强 Alpha" if slope > 0 else "❄️ 弱 Beta"})
+                except:
+                    audit_results.append({"代码": t, "5日斜率 (%)": 0.0, "状态": "数据抓取失败"})
+        
+        if audit_results:
+            res_df = pd.DataFrame(audit_results).sort_values(by="5日斜率 (%)", ascending=False)
+            st.table(res_df)
 
     with tabs[4]:
         st.subheader("📊 系统验证 (GSMI vs Nasdaq 周度版)")
