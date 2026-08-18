@@ -250,11 +250,11 @@ try:
         st.write("### 🚀 5日斜率 (Z轴) 实时对比表")
         input_cols = st.columns(5)
         tickers = []
-        tickers.append(input_cols[0].text_input("标的 1", "561980.SS"))
+        tickers.append(input_cols[0].text_input("标的 1", "159558.SZ"))
         tickers.append(input_cols[1].text_input("标的 2", "159326.SZ"))
-        tickers.append(input_cols[2].text_input("标的 3", "512480.SS"))
-        tickers.append(input_cols[3].text_input("标的 4", "515260.SS"))
-        tickers.append(input_cols[4].text_input("标的 5", "513310.SS"))
+        tickers.append(input_cols[2].text_input("标的 3", "512670.SS"))
+        tickers.append(input_cols[3].text_input("标的 4", "515880.SS"))
+        tickers.append(input_cols[4].text_input("标的 5", "159530.SZ"))
         
         audit_results = []
         for t in tickers:
@@ -276,7 +276,7 @@ try:
         st.write("---")
         # --- 保留：原本的单项深度查询部分 ---
         st.write("### 🔍 单项深度审计图表")
-        audit_ticker = st.text_input("输入要详细审计的 ETF 代码", "561980.SS", key="single_audit")
+        audit_ticker = st.text_input("输入要详细审计的 ETF 代码(159558.SZ设备/159326.SZ电网/512670.SS空天/515880.SS通信/159566.SZ储能/159530.SZ机器人)", "159558.SZ", key="single_audit")
         if audit_ticker:
             try:
                 audit_data = yf.download(audit_ticker, start=df.index[0] - timedelta(days=10), end=df.index[-1], progress=False)
