@@ -86,7 +86,7 @@ def get_tga_forecast(curr_tga_billion, target_val):
     if m == 4 and 10 <= d <= 22: msg, risk = "🚨 【年度吸水期】个人税高峰，NL面临强压。", "High"
     elif m in [6, 9, 12] and 12 <= d <= 20: msg, risk = "🟠 【季中吸水期】企业预缴税，NL承压。", "High"
     elif 13 <= d <= 18: msg, risk = "🟢 【利息释放期】国债付息，利好流动性修复。", "Low"
-    elif 1 <= d <= 5: msg, risk = "🔵 【财政支出期】月初支出高峰，水源偏暖。", "Low"
+    elif 1 <= d <= 5: msg, risk = "🔵 【财政支出期】月初支出高峰，水源背景偏暖。", "Low"
     gap = target_val - curr_tga_billion
     return msg, gap, risk
 
@@ -162,12 +162,10 @@ try:
     df = calculate_history(df_raw, fms_cash)
     latest = df.iloc[-1]
 
-    # --- 核心修正：定义所有 UI 变量 ---
+    # 变量补齐
     nl_ma_last = df['nl'].rolling(20).mean().iloc[-1]
     s_nl_latest = (15 if latest['nl'] > nl_ma_last else 0) + (10 if latest['nl'] > df['nl'].iloc[-6] else 0)
-    
     cg_ma_last = df['cg_ratio'].rolling(200).mean().iloc[-1]
-    # 修正 s_cg_latest 定义
     s_cg_latest = (10 if latest['cg_ratio'] > cg_ma_last else 0) + (5 if latest['cg_ratio'] > df['cg_ratio'].iloc[-10:-5].mean() else 0)
 
     # --- 5. UI 展示 ---
@@ -222,6 +220,8 @@ try:
             st.caption(f"📈 上涨天数: {pos_days} | 📉 下跌天数: {28-pos_days}")
         with e2:
             st.plotly_chart(go.Figure(go.Bar(x=btc_ret.tail(28).index, y=btc_ret.tail(28).values, marker_color=['#00ffcc' if x>0 else '#FF3131' for x in btc_ret.tail(28)])).update_layout(height=250, template="plotly_dark", margin=dict(l=10, r=10, t=40, b=10)), use_container_width=True)
+        st.write("**BTC 120日宏观趋势 (金丝雀价格线)**")
+        st.line_chart(df['btc'].tail(120), height=200)
 
     with tabs[2]:
         st.subheader("🏗️ 现实增长与信用防线")
@@ -245,9 +245,9 @@ try:
 
     with tabs[3]:
         st.subheader("🎯 Alpha 审计 (Relative Strength)")
-        st.caption("逻辑：寻找正在‘吸血’大盘的领头羊。基准：创业板 ETF (159915.SZ)")
-        st.write("### 🚀 5日斜率 (Z轴) 实时对比表")
         
+        # --- 需求：5行比较列表 ---
+        st.write("### 🚀 5日斜率 (Z轴) 实时对比表")
         input_cols = st.columns(5)
         tickers = []
         tickers.append(input_cols[0].text_input("标的 1", "561980.SS"))
@@ -267,12 +267,50 @@ try:
                         rs_ratio = combined['target'] / combined['base']
                         slope = (rs_ratio.iloc[-1] / rs_ratio.iloc[-6] - 1) * 100
                         audit_results.append({"代码": t, "5日斜率 (%)": round(slope, 2), "状态": "🔥 强 Alpha" if slope > 0 else "❄️ 弱 Beta"})
-                except:
-                    audit_results.append({"代码": t, "5日斜率 (%)": 0.0, "状态": "数据抓取失败"})
+                except: pass
         
         if audit_results:
             res_df = pd.DataFrame(audit_results).sort_values(by="5日斜率 (%)", ascending=False)
             st.table(res_df)
+        
+        st.write("---")
+        # --- 保留：原本的单项深度查询部分 ---
+        st.write("### 🔍 单项深度审计图表")
+        audit_ticker = st.text_input("输入要详细审计的 ETF 代码", "561980.SS", key="single_audit")
+        if audit_ticker:
+            try:
+                audit_data = yf.download(audit_ticker, start=df.index[0] - timedelta(days=10), end=df.index[-1], progress=False)
+                if not audit_data.empty:
+                    # 计算 VR (量比)
+                    vol_col = audit_data['Volume'].iloc[:, 0] if isinstance(audit_data.columns, pd.MultiIndex) else audit_data['Volume']
+                    curr_vol = vol_col.iloc[-1]
+                    avg_vol = vol_col.iloc[-6:-1].mean()
+                    vr = curr_vol / avg_vol if avg_vol > 0 else 0
+                    
+                    # 计算 RS
+                    audit_close = audit_data['Close'].iloc[:, 0] if isinstance(audit_data.columns, pd.MultiIndex) else audit_data['Close']
+                    rs_df = pd.DataFrame({'target': audit_close, 'base': df['chinext']}).ffill().dropna()
+                    rs_ratio = rs_df['target'] / rs_df['base']
+                    rs_20ma = rs_ratio.rolling(20).mean()
+                    rs_250ma = rs_ratio.rolling(250).mean()
+                    
+                    v_col1, v_col2, v_col3 = st.columns(3)
+                    with v_col1:
+                        st.metric("量能倍率 (VR)", f"{vr:.2f}", "🔥 爆发" if vr > 1.5 else "⚖️ 平稳")
+                    with v_col2:
+                        curr_rs = rs_ratio.iloc[-1]
+                        st.metric("相对强度 (RS)", f"{curr_rs:.6f}")
+                    with v_col3:
+                        if rs_ratio.iloc[-1] > rs_250ma.iloc[-1]: st.success("✅ 已站上 250MA (长周期反转)")
+                        else: st.warning("⚠️ 仍在 250MA 下方")
+
+                    fig_rs = go.Figure()
+                    fig_rs.add_trace(go.Scatter(x=rs_ratio.index[-250:], y=rs_ratio.values[-250:], name="RS 曲线", line=dict(color='#00ffcc', width=3)))
+                    fig_rs.add_trace(go.Scatter(x=rs_20ma.index[-250:], y=rs_20ma.values[-250:], name="RS 20MA", line=dict(color='white', width=1, dash='dot')))
+                    fig_rs.add_trace(go.Scatter(x=rs_250ma.index[-250:], y=rs_250ma.values[-250:], name="RS 250MA", line=dict(color='orange', width=2, dash='dash')))
+                    fig_rs.update_layout(height=400, template="plotly_dark", legend=dict(orientation="h", y=1.1))
+                    st.plotly_chart(fig_rs, use_container_width=True)
+            except: st.warning("无法审计该标的。")
 
     with tabs[4]:
         st.subheader("📊 系统验证 (GSMI vs Nasdaq 周度版)")
@@ -282,6 +320,19 @@ try:
         fig_v.add_trace(go.Scatter(x=df_w.index, y=df_w['gsmi_score'], name="GSMI 评分", line=dict(color='#00ffcc', width=4), mode='lines+markers'))
         fig_v.add_trace(go.Scatter(x=df_w.index, y=norm_q, name="QQQ (归一化)", line=dict(color='#FFD700', dash='dot'), yaxis="y2"))
         st.plotly_chart(fig_v.update_layout(height=400, template="plotly_dark", yaxis=dict(title="GSMI", range=[0,100]), yaxis2=dict(overlaying="y", side="right", showgrid=False)), use_container_width=True)
+        
+        st.write("---")
+        st.subheader("🌉 最后执行确认")
+        hk1, hk2 = st.columns(2)
+        with hk1:
+            st.metric("港元汇率 (USD/HKD)", f"{latest['hkd']:.4f}", "吸金" if latest['hkd'] < 7.80 else "失血")
+            if len(df) > 20:
+                hsi_perf = (latest['hsi']/df['hsi'].iloc[-20] - 1)*100
+                as300_perf = (latest['as300']/df['as300'].iloc[-20] - 1)*100
+                st.write(f"📊 20日动能差 HSI vs AS300: {hsi_perf - as300_perf:+.2f}%")
+        with hk2:
+            st.markdown(f"[沽空比](http://www.aastocks.com/tc/stocks/market/shortselling/securities-eligible.aspx) | [信贷脉冲](https://www.macromicro.me/collections/31/cn-finance-relative/35559/china-credit-impulse-index) | [M1-M2剪刀差](https://www.macromicro.me/charts/260/cn-china-m1-m2)")
+            st.slider("手动录入：大市沽空比率 (%)", 5.0, 35.0, 16.5, 0.1)
 
 except Exception as e:
     st.error(f"系统运行错误: {e}")
