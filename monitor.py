@@ -111,6 +111,9 @@ def fetch_and_sync_data():
         data_dict['rrp'] = fred.get_series('RRPONTSYD', start, end)
         data_dict['sofr'] = fred.get_series('SOFR', start, end)
         data_dict['iorb'] = fred.get_series('IORB', start, end)
+        # 新增债市指标
+        data_dict['us2y'] = fred.get_series('DGS2', start, end)
+        data_dict['term_premium'] = fred.get_series('ACMTP10', start, end)
     except: pass
 
     dxy_raw = safe_get_yf("DX-Y.NYB")
@@ -124,6 +127,7 @@ def fetch_and_sync_data():
     data_dict['btc'] = safe_get_yf("BTC-USD")
     data_dict['qqq'] = safe_get_yf("QQQ")
     data_dict['chinext'] = safe_get_yf("159915.SZ")
+    data_dict['move'] = safe_get_yf("^MOVE") # 债市波动率
 
     df = pd.DataFrame(data_dict).ffill().dropna()
     if not df.empty:
@@ -189,7 +193,7 @@ try:
         else: st.success(f"✅ 系统血压正常: SOFR-IORB {sofr_val:+.1f} bps")
 
     st.markdown("---")
-    tabs = st.tabs(["💧 流动性水源", "🧠 情绪与购买力", "🏗️ 现实与防线", "🎯 Alpha 审计 (RS)", "📊 系统验证"])
+    tabs = st.tabs(["💧 流动性水源", "🧠 情绪与购买力", "🏗️ 现实与防线", "🎯 Alpha 审计 (RS)", "🏛️ 债市审计", "📊 系统验证"])
 
     with tabs[0]:
         st.subheader("🏦 核心流动性水源 (NL + TIPS + DXY)")
@@ -208,6 +212,7 @@ try:
         fig_nl.add_trace(go.Scatter(x=df.index, y=df['tips'], name="TIPS (%)", line=dict(color='#FF3131', dash='dot'), yaxis="y2"))
         fig_nl.update_layout(height=350, template="plotly_dark", yaxis=dict(title="NL (T)"), yaxis2=dict(overlaying="y", side="right", showgrid=False))
         st.plotly_chart(fig_nl, use_container_width=True)
+        st.markdown(f"[CESI花旗惊奇指数-TIPS前瞻](https://www.macromicro.me/collections/34/us-stock-relative/55674/us-citi-surprise-index-earnings-revision)")
 
     with tabs[1]:
         st.subheader("🧠 情绪与购买力监控")
@@ -247,7 +252,7 @@ try:
         st.subheader("🎯 Alpha 审计 (Relative Strength)")
         st.caption("逻辑：寻找正在‘吸血’大盘的领头羊。基准：创业板 ETF (159915.SZ)")
         
-        # --- 5行比较列表 ---
+        # --- 修正：5行比较列表默认值 ---
         st.write("### 🚀 5日斜率 (Z轴) 实时对比表")
         input_cols = st.columns(5)
         tickers = []
@@ -275,43 +280,32 @@ try:
             st.table(res_df)
         
         st.write("---")
-        # --- 修正：单项深度审计图表 (补齐斜率和强弱标示) ---
+        # --- 修正：单项深度审计默认值与提示 ---
         st.write("### 🔍 单项深度审计图表")
         audit_ticker = st.text_input("输入要详细审计的 ETF 代码(159558.SZ设备/159326.SZ电网/512670.SS空天/515880.SS通信/159566.SZ储能/159530.SZ机器人)", "159558.SZ", key="single_audit")
         if audit_ticker:
             try:
                 audit_data = yf.download(audit_ticker, start=df.index[0] - timedelta(days=10), end=df.index[-1], progress=False)
                 if not audit_data.empty:
-                    # 1. 计算 VR (量比)
                     vol_col = audit_data['Volume'].iloc[:, 0] if isinstance(audit_data.columns, pd.MultiIndex) else audit_data['Volume']
                     curr_vol = vol_col.iloc[-1]
                     avg_vol = vol_col.iloc[-6:-1].mean()
                     vr = curr_vol / avg_vol if avg_vol > 0 else 0
-                    
-                    # 2. 计算 RS 及其均线
                     audit_close = audit_data['Close'].iloc[:, 0] if isinstance(audit_data.columns, pd.MultiIndex) else audit_data['Close']
                     rs_df = pd.DataFrame({'target': audit_close, 'base': df['chinext']}).ffill().dropna()
                     rs_ratio = rs_df['target'] / rs_df['base']
                     rs_20ma = rs_ratio.rolling(20).mean()
                     rs_250ma = rs_ratio.rolling(250).mean()
-                    
-                    # 3. 计算 5日斜率 (Z轴)
                     curr_rs = rs_ratio.iloc[-1]
-                    prev_rs = rs_ratio.iloc[-6]
-                    rs_slope_single = (curr_rs / prev_rs - 1) * 100
+                    rs_slope_single = (curr_rs / rs_ratio.iloc[-6] - 1) * 100
                     
-                    # 4. UI 展示
                     v_col1, v_col2, v_col3 = st.columns(3)
-                    with v_col1:
-                        st.metric("量能倍率 (VR)", f"{vr:.2f}", "🔥 爆发" if vr > 1.5 else "⚖️ 平稳")
-                    with v_col2:
-                        # 重新加入 5日斜率显示
-                        st.metric("相对强度 (RS)", f"{curr_rs:.6f}", f"5日斜率: {rs_slope_single:+.2f}%")
+                    with v_col1: st.metric("量能倍率 (VR)", f"{vr:.2f}", "🔥 爆发" if vr > 1.5 else "⚖️ 平稳")
+                    with v_col2: st.metric("相对强度 (RS)", f"{curr_rs:.6f}", f"5日斜率: {rs_slope_single:+.2f}%")
                     with v_col3:
-                        # 重新加入 Alpha/Beta 强弱判定
                         rs_tag = "🔥 强 Alpha" if curr_rs > rs_20ma.iloc[-1] else "❄️ 弱 Beta"
                         st.write(f"**审计判定：{rs_tag}**")
-                        if rs_ratio.iloc[-1] > rs_250ma.iloc[-1]: st.success("✅ 已站上 250MA (长周期反转)")
+                        if rs_ratio.iloc[-1] > rs_250ma.iloc[-1]: st.success("✅ 已站上 250MA")
                         else: st.warning("⚠️ 仍在 250MA 下方")
 
                     fig_rs = go.Figure()
@@ -323,6 +317,42 @@ try:
             except: st.warning("无法审计该标的。")
 
     with tabs[4]:
+        # --- 需求：新增债市审计标签页 ---
+        st.subheader("🏛️ 债市重力审计 (Bond Market Audit)")
+        st.caption("逻辑：债市是所有资产定价的母体。监控重力的‘量’、‘价’与‘心跳’。")
+        
+        b_col1, b_col2, b_col3 = st.columns(3)
+        with b_col1:
+            move_val = latest['move']
+            move_status = "🚨 极度恐慌" if move_val > 120 else ("🟡 警戒" if move_val > 100 else "🟢 平稳")
+            st.metric("MOVE 指数 (债市VIX)", f"{move_val:.1f}", move_status)
+        with b_col2:
+            us2y_val = latest['us2y']
+            us2y_ma50 = df['us2y'].rolling(50).mean().iloc[-1]
+            us2y_status = "📈 重力加速" if us2y_val > us2y_ma50 else "📉 重力减弱"
+            st.metric("2Y 美债收益率", f"{us2y_val:.2f}%", us2y_status)
+        with b_col3:
+            tp_val = latest['term_premium']
+            st.metric("10Y 期限溢价", f"{tp_val:.2f}", "信用减值" if tp_val > 0 else "信用溢价")
+            
+        st.write("---")
+        # 债市对比图
+        fig_bond = go.Figure()
+        fig_bond.add_trace(go.Scatter(x=df.index[-120:], y=df['us2y'].tail(120), name="2Y 收益率 (政策预期)", line=dict(color='#FF3131', width=3)))
+        fig_bond.add_trace(go.Scatter(x=df.index[-120:], y=df['us2y'].rolling(50).mean().tail(120), name="50MA", line=dict(color='white', dash='dot')))
+        fig_bond.add_trace(go.Scatter(x=df.index[-120:], y=df['move'].tail(120), name="MOVE 指数 (右轴)", line=dict(color='#00ffcc', width=2, dash='dash'), yaxis="y2"))
+        
+        fig_bond.update_layout(
+            height=450, template="plotly_dark",
+            hovermode="x unified",
+            yaxis=dict(title="Yield (%)", gridcolor="#333"),
+            yaxis2=dict(title="MOVE Index", overlaying="y", side="right", showgrid=False),
+            legend=dict(orientation="h", y=1.1)
+        )
+        st.plotly_chart(fig_bond, use_container_width=True)
+        st.info("💡 审计逻辑：当 2Y 收益率突破 50MA 且 MOVE 指数突破 120 时，全球风险资产将面临‘物理级’清算。")
+
+    with tabs[5]:
         st.subheader("📊 系统验证 (GSMI vs Nasdaq 周度版)")
         df_w = df.resample('W-FRI').last().dropna(subset=['gsmi_score', 'qqq'])
         norm_q = (df_w['qqq'] / df_w['qqq'].iloc[0]) * 100
