@@ -109,7 +109,6 @@ def fetch_and_sync_data():
             status_report[name] = "❌ 错误"
             return pd.Series(dtype='float64')
 
-    # --- 核心修正：预定义所有键，防止 KeyError ---
     data_dict = {k: pd.Series(dtype='float64') for k in ['tips', 'spread', 'assets', 'tga', 'rrp', 'sofr', 'iorb', 'us2y', 'term_premium']}
     
     try:
@@ -123,8 +122,7 @@ def fetch_and_sync_data():
         data_dict['us2y'] = fred.get_series('DGS2', start, end)
         data_dict['term_premium'] = fred.get_series('ACMTP10', start, end)
         status_report["FRED 数据源"] = "✅ 成功"
-    except Exception as e: 
-        status_report["FRED 数据源"] = f"❌ 失败: {str(e)}"
+    except: status_report["FRED 数据源"] = "❌ 失败"
 
     dxy_raw = safe_get_yf("DX-Y.NYB", "DXY指数")
     if dxy_raw.empty: dxy_raw = safe_get_yf("UUP", "DXY备用") * 3.68
@@ -139,7 +137,11 @@ def fetch_and_sync_data():
     data_dict['chinext'] = safe_get_yf("159915.SZ", "创业板ETF")
     data_dict['move'] = safe_get_yf("^MOVE", "MOVE指数")
 
-    df = pd.DataFrame(data_dict).ffill().dropna(subset=['tips', 'assets', 'dxy']) # 仅对核心列去空
+    # --- 核心修正：强制转换索引为 DatetimeIndex ---
+    df = pd.DataFrame(data_dict)
+    df.index = pd.to_datetime(df.index)
+    df = df.ffill().dropna(subset=['tips', 'assets', 'dxy'])
+    
     if not df.empty:
         df['nl'] = (df['assets'] - df['tga'].fillna(0) - df['rrp'].fillna(0)) / 1000000
         df['cg_ratio'] = df['copper'] / df['gold']
@@ -219,21 +221,9 @@ try:
         else: st.info(t_msg)
         
         col_t1, col_t2, col_t3 = st.columns(3)
-        col_t1.metric("当前 TGA 余额", f"${latest['tga']/1000:.1f}B")
-        col_t2.metric("季末目标位", f"${tga_target}B")
-        col_t3.metric("目标回归缺口", f"{t_gap:+.1f}B", delta_color="normal" if t_gap < 0 else "inverse")
-
-        st.write("---")
-        q1, q2, q3, q4 = st.columns(4)
-        q1.markdown('<div class="quadrant-box">🔵 <b>25分: NL扩张期</b><br>🚀 进攻</div>', unsafe_allow_html=True)
-        q2.markdown('<div class="quadrant-box">🟡 <b>15分: NL滞涨期</b><br>⚠️ 警惕</div>', unsafe_allow_html=True)
-        q3.markdown('<div class="quadrant-box">🟠 <b>10分: NL修复期</b><br>🔍 观察</div>', unsafe_allow_html=True)
-        q4.markdown('<div class="quadrant-box">🔴 <b>0分: NL衰退期</b><br>🛑 空仓</div>', unsafe_allow_html=True)
-
-        m1, m2, m3 = st.columns(3)
-        m1.metric("净流动性 (NL)", f"${latest['nl']:.2f}T", f"评分: {s_nl_latest}/25 | 周变: {latest['nl'] - df['nl'].iloc[-6]:+.3f}T")
-        m2.metric("10Y TIPS", f"{latest['tips']:.2f}%", f"评分: {score_linear(latest['tips'],0.5,2.5,20,True):.1f}/20")
-        m3.metric("美元指数 (DXY)", f"{latest['dxy']:.2f}", f"评分: {score_linear(latest['dxy'],98,108,15,True):.1f}/15")
+        col_t1.metric("净流动性 (NL)", f"${latest['nl']:.2f}T", f"评分: {s_nl_latest}/25 | 周变: {latest['nl'] - df['nl'].iloc[-6]:+.3f}T")
+        col_t2.metric("10Y TIPS", f"{latest['tips']:.2f}%", f"评分: {score_linear(latest['tips'],0.5,2.5,20,True):.1f}/20")
+        col_t3.metric("美元指数 (DXY)", f"{latest['dxy']:.2f}", f"评分: {score_linear(latest['dxy'],98,108,15,True):.1f}/15")
         
         fig_nl = go.Figure()
         fig_nl.add_trace(go.Scatter(x=df.index, y=df['nl'], name="净流动性(T)", line=dict(color='#00ffcc', width=3)))
@@ -294,6 +284,7 @@ try:
                     if not t_data.empty:
                         t_close = t_data['Close'].iloc[:, 0] if isinstance(t_data.columns, pd.MultiIndex) else t_data['Close']
                         combined = pd.DataFrame({'target': t_close, 'base': df['chinext']}).ffill().dropna()
+                        combined.index = pd.to_datetime(combined.index) # 强制转换
                         rs_ratio = combined['target'] / combined['base']
                         slope = (rs_ratio.iloc[-1] / rs_ratio.iloc[-6] - 1) * 100
                         audit_results.append({"代码": t, "5日斜率 (%)": round(slope, 2), "状态": "🔥 强 Alpha" if slope > 0 else "❄️ 弱 Beta"})
@@ -305,7 +296,7 @@ try:
         
         st.write("---")
         st.write("### 🔍 单项深度审计图表")
-        audit_ticker = st.text_input("输入要详细审计的 ETF 代码(159558.SZ设备/159326.SZ电网/512670.SS空天/515880.SS通信/159566.SZ储能/159530.SZ机器人)", "159558.SZ", key="single_audit")
+        audit_ticker = st.text_input("输入要详细审计的 ETF 代码", "159558.SZ", key="single_audit")
         if audit_ticker:
             try:
                 audit_data = yf.download(audit_ticker, start=df.index[0] - timedelta(days=10), end=df.index[-1], progress=False)
@@ -316,6 +307,7 @@ try:
                     vr = curr_vol / avg_vol if avg_vol > 0 else 0
                     audit_close = audit_data['Close'].iloc[:, 0] if isinstance(audit_data.columns, pd.MultiIndex) else audit_data['Close']
                     rs_df = pd.DataFrame({'target': audit_close, 'base': df['chinext']}).ffill().dropna()
+                    rs_df.index = pd.to_datetime(rs_df.index) # 强制转换
                     rs_ratio = rs_df['target'] / rs_df['base']
                     rs_20ma = rs_ratio.rolling(20).mean()
                     rs_250ma = rs_ratio.rolling(250).mean()
@@ -365,12 +357,17 @@ try:
 
     with tabs[5]:
         st.subheader("📊 系统验证 (GSMI vs Nasdaq 周度版)")
-        df_w = df.resample('W-FRI').last().dropna(subset=['gsmi_score', 'qqq'])
-        norm_q = (df_w['qqq'] / df_w['qqq'].iloc[0]) * 100
-        fig_v = go.Figure()
-        fig_v.add_trace(go.Scatter(x=df_w.index, y=df_w['gsmi_score'], name="GSMI 评分", line=dict(color='#00ffcc', width=4), mode='lines+markers'))
-        fig_v.add_trace(go.Scatter(x=df_w.index, y=norm_q, name="QQQ (归一化)", line=dict(color='#FFD700', dash='dot'), yaxis="y2"))
-        st.plotly_chart(fig_v.update_layout(height=400, template="plotly_dark", yaxis=dict(title="GSMI", range=[0,100]), yaxis2=dict(overlaying="y", side="right", showgrid=False)), use_container_width=True)
+        # --- 核心修正：确保重采样前索引类型正确 ---
+        df_resample = df.copy()
+        df_resample.index = pd.to_datetime(df_resample.index)
+        df_w = df_resample.resample('W-FRI').last().dropna(subset=['gsmi_score', 'qqq'])
+        
+        if not df_w.empty:
+            norm_q = (df_w['qqq'] / df_w['qqq'].iloc[0]) * 100
+            fig_v = go.Figure()
+            fig_v.add_trace(go.Scatter(x=df_w.index, y=df_w['gsmi_score'], name="GSMI 评分", line=dict(color='#00ffcc', width=4), mode='lines+markers'))
+            fig_v.add_trace(go.Scatter(x=df_w.index, y=norm_q, name="QQQ (归一化)", line=dict(color='#FFD700', dash='dot'), yaxis="y2"))
+            st.plotly_chart(fig_v.update_layout(height=400, template="plotly_dark", yaxis=dict(title="GSMI", range=[0,100]), yaxis2=dict(overlaying="y", side="right", showgrid=False)), use_container_width=True)
         
         st.write("---")
         st.subheader("🌉 最后执行确认")
