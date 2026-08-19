@@ -12,14 +12,14 @@ st.set_page_config(page_title="GSMI Tactical | 首席风险官看板", layout="w
 st.markdown("""
     <style>
     .main { background-color: #0e1117; }
-    div[data-testid="stMetricValue"] { font-size: 28px; font-weight: bold; color: #00ffcc; }
+    div[data-testid="stMetricValue"] { font-size: 26px; font-weight: bold; color: #00ffcc; }
     .standard-text { color: #aaa; font-size: 14px; margin-top: -10px; margin-bottom: 10px; font-weight: bold; }
-    .quadrant-box { padding: 12px; border-radius: 5px; border: 1px solid #333; background-color: #1a1c24; text-align: center; min-height: 70px;}
+    .quadrant-box { padding: 10px; border-radius: 5px; border: 1px solid #333; background-color: #1a1c24; text-align: center; min-height: 60px;}
     </style>
     """, unsafe_allow_html=True)
 
 st.title("🏹 GSMI 全球聪明钱监控与验证系统")
-st.caption("角色设定：顶级对冲基金 CRO | 核心原则：数据优先、反向审计、物理一致性")
+st.caption("版本：2026.08.18 生产版 | 状态：全维度物理审计开启")
 
 # --- 2. 侧边栏配置 ---
 st.sidebar.header("🛠️ 核心参数配置")
@@ -46,16 +46,14 @@ st.sidebar.markdown("---")
 with st.sidebar.expander("📖 GSMI 评分规则细则", expanded=True):
     st.markdown("""
     **1. 核心货币 (45分):**  
-    - NL > 4周均线 (+15)  
-    - NL 本周环比增加 (+10)  
+    - NL > 4周均线 (+15) / 环比增加 (+10)  
     - TIPS 0.5%->2.5% (20分线性)  
     **2. 全球汇率 (15分):**  
     - DXY 98->108 (15分线性)  
     **3. 机构情绪 (15分):**  
     - FMS 6.0%->3.5% (15分线性)  
     **4. 宏观现实 (25分):**  
-    - 铜金比 > 200日线 (+10)  
-    - 铜金比 近5日向上 (+5)  
+    - 铜金比 > 200日线 (+10) / 近5日向上 (+5)  
     - 利差 300->600bps (10分线性)
     """)
 
@@ -70,7 +68,7 @@ if not fred_key:
 
 fred = Fred(api_key=fred_key)
 
-# --- 3. 数据处理函数 ---
+# --- 3. 核心审计函数 ---
 
 def score_linear(val, min_val, max_val, max_score, reverse=False):
     if not reverse:
@@ -94,65 +92,77 @@ def get_tga_forecast(curr_tga_billion, target_val):
 def fetch_and_sync_data():
     end = datetime.now()
     start = end - timedelta(days=500)
-    status_report = {}
-
-    def safe_get_yf(ticker, name):
+    
+    def safe_get_yf(ticker):
         try:
             df = yf.download(ticker, start=start, end=end, progress=False)
-            if df is None or df.empty: 
-                status_report[name] = "❌ 抓取失败"
-                return pd.Series(dtype='float64')
-            data = df['Close'].iloc[:, 0] if isinstance(df.columns, pd.MultiIndex) else df['Close']
-            status_report[name] = "✅ 成功"
+            if df.empty: return pd.Series(dtype='float64')
+            # 彻底解决 MultiIndex 问题
+            if isinstance(df.columns, pd.MultiIndex):
+                data = df['Close'].iloc[:, 0]
+            else:
+                data = df['Close']
             return data.ffill()
-        except:
-            status_report[name] = "❌ 错误"
-            return pd.Series(dtype='float64')
+        except: return pd.Series(dtype='float64')
 
-    data_dict = {k: pd.Series(dtype='float64') for k in ['tips', 'spread', 'assets', 'tga', 'rrp', 'sofr', 'iorb', 'us2y', 'term_premium']}
-    
+    # 1. 抓取 FRED
     try:
-        data_dict['tips'] = fred.get_series('DFII10', start, end)
-        data_dict['spread'] = fred.get_series('BAMLH0A0HYM2', start, end)
-        data_dict['assets'] = fred.get_series('WALCL', start, end)
-        data_dict['tga'] = fred.get_series('WTREGEN', start, end)
-        data_dict['rrp'] = fred.get_series('RRPONTSYD', start, end)
-        data_dict['sofr'] = fred.get_series('SOFR', start, end)
-        data_dict['iorb'] = fred.get_series('IORB', start, end)
-        data_dict['us2y'] = fred.get_series('DGS2', start, end)
-        data_dict['term_premium'] = fred.get_series('ACMTP10', start, end)
-        status_report["FRED 数据源"] = "✅ 成功"
-    except: status_report["FRED 数据源"] = "❌ 失败"
+        tips = fred.get_series('DFII10', start, end)
+        spread = fred.get_series('BAMLH0A0HYM2', start, end)
+        assets = fred.get_series('WALCL', start, end)
+        tga = fred.get_series('WTREGEN', start, end)
+        rrp = fred.get_series('RRPONTSYD', start, end)
+        sofr = fred.get_series('SOFR', start, end)
+        iorb = fred.get_series('IORB', start, end)
+        us2y = fred.get_series('DGS2', start, end)
+        tp = fred.get_series('ACMTP10', start, end)
+    except:
+        st.error("FRED 数据源断流，请检查 API Key。")
+        return pd.DataFrame()
 
-    dxy_raw = safe_get_yf("DX-Y.NYB", "DXY指数")
-    if dxy_raw.empty: dxy_raw = safe_get_yf("UUP", "DXY备用") * 3.68
-    data_dict['dxy'] = dxy_raw
-    data_dict['copper'] = safe_get_yf("HG=F", "铜期货")
-    data_dict['gold'] = safe_get_yf("GC=F", "黄金期货")
-    data_dict['hkd'] = safe_get_yf("HKD=X", "港元汇率")
-    data_dict['hsi'] = safe_get_yf("^HSI", "恒生指数")
-    data_dict['as300'] = safe_get_yf("000300.SS", "沪深300")
-    data_dict['btc'] = safe_get_yf("BTC-USD", "比特币")
-    data_dict['qqq'] = safe_get_yf("QQQ", "纳斯达克100")
-    data_dict['chinext'] = safe_get_yf("159915.SZ", "创业板ETF")
-    data_dict['move'] = safe_get_yf("^MOVE", "MOVE指数")
-
-    # --- 核心修正：强制转换索引为 DatetimeIndex ---
-    df = pd.DataFrame(data_dict)
+    # 2. 抓取 YF
+    dxy = safe_get_yf("DX-Y.NYB")
+    if dxy.empty: dxy = safe_get_yf("UUP") * 3.68
+    
+    # 3. 显式对齐
+    main_df = pd.DataFrame(index=tips.index)
+    main_df['tips'] = tips
+    main_df['spread'] = spread
+    main_df['assets'] = assets
+    main_df['tga'] = tga
+    main_df['rrp'] = rrp
+    main_df['sofr'] = sofr
+    main_df['iorb'] = iorb
+    main_df['us2y'] = us2y
+    main_df['term_premium'] = tp
+    
+    # 合并日更数据
+    yf_data = pd.DataFrame({
+        'dxy': dxy,
+        'copper': safe_get_yf("HG=F"),
+        'gold': safe_get_yf("GC=F"),
+        'hkd': safe_get_yf("HKD=X"),
+        'hsi': safe_get_yf("^HSI"),
+        'as300': safe_get_yf("000300.SS"),
+        'btc': safe_get_yf("BTC-USD"),
+        'qqq': safe_get_yf("QQQ"),
+        'chinext': safe_get_yf("159915.SZ"),
+        'move': safe_get_yf("^MOVE")
+    })
+    
+    df = main_df.join(yf_data, how='left').ffill().dropna(subset=['tips', 'assets', 'dxy'])
     df.index = pd.to_datetime(df.index)
-    df = df.ffill().dropna(subset=['tips', 'assets', 'dxy'])
     
     if not df.empty:
         df['nl'] = (df['assets'] - df['tga'].fillna(0) - df['rrp'].fillna(0)) / 1000000
         df['cg_ratio'] = df['copper'] / df['gold']
-        if 'sofr' in df.columns and 'iorb' in df.columns:
-            df['sofr_spread'] = (df['sofr'] - df['iorb']) * 100
-    return df, status_report
+        df['sofr_spread'] = (df['sofr'] - df['iorb']) * 100
+        
+    return df
 
 def calculate_history(df, fms_val):
     if df.empty: return df
-    if 'spread' in df.columns and df['spread'].max() < 50:
-        df['spread'] = df['spread'] * 100
+    if df['spread'].max() < 50: df['spread'] = df['spread'] * 100
 
     gsmi_history = []
     nl_ma4 = df['nl'].rolling(20).mean()
@@ -164,7 +174,7 @@ def calculate_history(df, fms_val):
         s_tips = score_linear(df['tips'].iloc[i], 0.5, 2.5, 20, reverse=True)
         s_dxy = score_linear(df['dxy'].iloc[i], 98, 108, 15, reverse=True)
         s_fms = score_linear(fms_val, 3.5, 6.0, 15, reverse=False)
-        s_cg = ((10 if df['cg_ratio'].iloc[i] > cg_ma200.iloc[i] else 0) if i > 200 else 0) + (5 if df['cg_ratio'].iloc[i] > df['cg_ratio'].iloc[i-10:i-5].mean() else 0)
+        s_cg = (10 if df['cg_ratio'].iloc[i] > cg_ma200.iloc[i] else 0) + (5 if df['cg_ratio'].iloc[i] > df['cg_ratio'].iloc[i-10:i-5].mean() else 0)
         s_spread = score_linear(df['spread'].iloc[i], 300, 600, 10, reverse=True)
         gsmi_history.append(s_nl + s_tips + s_dxy + s_fms + s_cg + s_spread)
     
@@ -174,16 +184,11 @@ def calculate_history(df, fms_val):
 # --- 4. 执行逻辑 ---
 
 try:
-    df_raw, report = fetch_and_sync_data()
-    if df_raw.empty:
-        st.error("❌ 无法获取完整宏观数据。诊断报告：")
-        st.write(report)
-        st.stop()
-        
-    df = calculate_history(df_raw, fms_cash)
+    df = calculate_history(fetch_and_sync_data(), fms_cash)
+    if df.empty: st.stop()
     latest = df.iloc[-1]
 
-    # 变量补齐
+    # 初始化 UI 变量
     nl_ma_last = df['nl'].rolling(20).mean().iloc[-1]
     s_nl_latest = (15 if latest['nl'] > nl_ma_last else 0) + (10 if latest['nl'] > df['nl'].iloc[-6] else 0)
     cg_ma_last = df['cg_ratio'].rolling(200).mean().iloc[-1]
@@ -205,10 +210,9 @@ try:
         t_map = {"冷清/低配": "🟢 低位安全", "标配": "🟡 中性观望", "极其拥挤": "🔴 警惕踩踏"}
         st.markdown(f"**关注目标: {target_name}**")
         st.title(t_map.get(target_status, "🟡 中性观望"))
-        if 'sofr_spread' in latest:
-            sofr_val = latest['sofr_spread']
-            if sofr_val > 0: st.error(f"⚠️ 系统血压异常: SOFR-IORB {sofr_val:+.1f} bps")
-            else: st.success(f"✅ 系统血压正常: SOFR-IORB {sofr_val:+.1f} bps")
+        sofr_val = latest['sofr_spread']
+        if sofr_val > 0: st.error(f"⚠️ 系统血压异常: SOFR-IORB {sofr_val:+.1f} bps")
+        else: st.success(f"✅ 系统血压正常: SOFR-IORB {sofr_val:+.1f} bps")
 
     st.markdown("---")
     tabs = st.tabs(["💧 流动性水源", "🧠 情绪与购买力", "🏗️ 现实与防线", "🎯 Alpha 审计 (RS)", "🏛️ 债市审计", "📊 系统验证"])
@@ -221,7 +225,7 @@ try:
         else: st.info(t_msg)
         
         col_t1, col_t2, col_t3 = st.columns(3)
-        col_t1.metric("净流动性 (NL)", f"${latest['nl']:.2f}T", f"评分: {s_nl_latest}/25 | 周变: {latest['nl'] - df['nl'].iloc[-6]:+.3f}T")
+        col_t1.metric("净流动性 (NL)", f"${latest['nl']:.2f}T", f"评分: {s_nl_latest}/25")
         col_t2.metric("10Y TIPS", f"{latest['tips']:.2f}%", f"评分: {score_linear(latest['tips'],0.5,2.5,20,True):.1f}/20")
         col_t3.metric("美元指数 (DXY)", f"{latest['dxy']:.2f}", f"评分: {score_linear(latest['dxy'],98,108,15,True):.1f}/15")
         
@@ -239,26 +243,23 @@ try:
             st.metric("FMS 机构现金", f"{fms_cash}%", f"得分: {score_linear(fms_cash,3.5,6.0,15):.1f}/15")
             pos_days = len(btc_ret.tail(28)[btc_ret.tail(28) > 0])
             st.write(f"**BTC 28日情绪扫描**")
-            st.caption(f"📈 上涨天数: {pos_days} | 📉 下跌天数: {28-pos_days}")
+            st.caption(f"📈 上涨天数: {pos_days} | 📉 下跌天数: {len(btc_ret.tail(28))-pos_days}")
         with e2:
             st.plotly_chart(go.Figure(go.Bar(x=btc_ret.tail(28).index, y=btc_ret.tail(28).values, marker_color=['#00ffcc' if x>0 else '#FF3131' for x in btc_ret.tail(28)])).update_layout(height=250, template="plotly_dark", margin=dict(l=10, r=10, t=40, b=10)), use_container_width=True)
-        st.write("**BTC 120日宏观趋势 (金丝雀价格线)**")
         st.line_chart(df['btc'].tail(120), height=200)
 
     with tabs[2]:
         st.subheader("🏗️ 现实增长与信用防线")
         r1, r2 = st.columns(2)
         with r1:
-            cg_val = latest['cg_ratio']
-            st.metric("铜金比趋势", f"{cg_val:.4f}", f"评分: {s_cg_latest}/15")
+            st.metric("铜金比趋势", f"{latest['cg_ratio']:.4f}", f"评分: {s_cg_latest}/15")
             fig_cg = go.Figure()
             fig_cg.add_trace(go.Scatter(x=df.index[-180:], y=df['cg_ratio'].tail(180), name="铜金比", line=dict(color='#00ffcc', width=3)))
             fig_cg.add_trace(go.Scatter(x=df.index[-180:], y=df['cg_ratio'].rolling(200).mean().tail(180), name="200MA", line=dict(color='orange', width=2, dash='dash')))
             fig_cg.update_layout(height=300, template="plotly_dark", yaxis=dict(tickformat=".4f"))
             st.plotly_chart(fig_cg, use_container_width=True)
         with r2:
-            sp_val = latest['spread']
-            st.metric("高收益债利差", f"{sp_val:.0f} bps", f"评分: {score_linear(sp_val,300,600,10,True):.1f}/10")
+            st.metric("高收益债利差", f"{latest['spread']:.0f} bps", f"评分: {score_linear(latest['spread'],300,600,10,True):.1f}/10")
             fig_spread = go.Figure()
             fig_spread.add_trace(go.Scatter(x=df.index[-180:], y=df['spread'].tail(180), name="利差", line=dict(color='#00ffcc', width=3)))
             fig_spread.add_trace(go.Scatter(x=df.index[-180:], y=[500]*180, name="500bps", line=dict(color='orange', width=2, dash='dash')))
@@ -269,118 +270,71 @@ try:
         st.subheader("🎯 Alpha 审计 (Relative Strength)")
         st.write("### 🚀 5日斜率 (Z轴) 实时对比表")
         input_cols = st.columns(5)
-        tickers = []
-        tickers.append(input_cols[0].text_input("标的 1", "159558.SZ"))
-        tickers.append(input_cols[1].text_input("标的 2", "159326.SZ"))
-        tickers.append(input_cols[2].text_input("标的 3", "512670.SS"))
-        tickers.append(input_cols[3].text_input("标的 4", "515880.SS"))
-        tickers.append(input_cols[4].text_input("标的 5", "159530.SZ"))
+        tickers = [input_cols[i].text_input(f"标的 {i+1}", v) for i, v in enumerate(["159558.SZ", "159326.SZ", "512670.SS", "515880.SS", "159530.SZ"])]
         
         audit_results = []
         for t in tickers:
             if t:
                 try:
-                    t_data = yf.download(t, start=df.index[-30], end=df.index[-1], progress=False)
+                    t_data = yf.download(t, start=df.index[-40], end=df.index[-1], progress=False)
                     if not t_data.empty:
                         t_close = t_data['Close'].iloc[:, 0] if isinstance(t_data.columns, pd.MultiIndex) else t_data['Close']
                         combined = pd.DataFrame({'target': t_close, 'base': df['chinext']}).ffill().dropna()
-                        combined.index = pd.to_datetime(combined.index) # 强制转换
+                        combined.index = pd.to_datetime(combined.index)
                         rs_ratio = combined['target'] / combined['base']
                         slope = (rs_ratio.iloc[-1] / rs_ratio.iloc[-6] - 1) * 100
                         audit_results.append({"代码": t, "5日斜率 (%)": round(slope, 2), "状态": "🔥 强 Alpha" if slope > 0 else "❄️ 弱 Beta"})
                 except: pass
         
         if audit_results:
-            res_df = pd.DataFrame(audit_results).sort_values(by="5日斜率 (%)", ascending=False)
-            st.table(res_df)
+            st.table(pd.DataFrame(audit_results).sort_values(by="5日斜率 (%)", ascending=False))
         
         st.write("---")
         st.write("### 🔍 单项深度审计图表")
         audit_ticker = st.text_input("输入要详细审计的 ETF 代码", "159558.SZ", key="single_audit")
         if audit_ticker:
             try:
-                audit_data = yf.download(audit_ticker, start=df.index[0] - timedelta(days=10), end=df.index[-1], progress=False)
-                if not audit_data.empty:
-                    vol_col = audit_data['Volume'].iloc[:, 0] if isinstance(audit_data.columns, pd.MultiIndex) else audit_data['Volume']
-                    curr_vol = vol_col.iloc[-1]
-                    avg_vol = vol_col.iloc[-6:-1].mean()
-                    vr = curr_vol / avg_vol if avg_vol > 0 else 0
-                    audit_close = audit_data['Close'].iloc[:, 0] if isinstance(audit_data.columns, pd.MultiIndex) else audit_data['Close']
-                    rs_df = pd.DataFrame({'target': audit_close, 'base': df['chinext']}).ffill().dropna()
-                    rs_df.index = pd.to_datetime(rs_df.index) # 强制转换
+                a_data = yf.download(audit_ticker, start=df.index[0]-timedelta(days=10), end=df.index[-1], progress=False)
+                if not a_data.empty:
+                    a_close = a_data['Close'].iloc[:, 0] if isinstance(a_data.columns, pd.MultiIndex) else a_data['Close']
+                    a_vol = a_data['Volume'].iloc[:, 0] if isinstance(a_data.columns, pd.MultiIndex) else a_data['Volume']
+                    vr = a_vol.iloc[-1] / a_vol.iloc[-6:-1].mean()
+                    rs_df = pd.DataFrame({'target': a_close, 'base': df['chinext']}).ffill().dropna()
+                    rs_df.index = pd.to_datetime(rs_df.index)
                     rs_ratio = rs_df['target'] / rs_df['base']
-                    rs_20ma = rs_ratio.rolling(20).mean()
-                    rs_250ma = rs_ratio.rolling(250).mean()
                     curr_rs = rs_ratio.iloc[-1]
-                    rs_slope_single = (curr_rs / rs_ratio.iloc[-6] - 1) * 100
+                    slope_single = (curr_rs / rs_ratio.iloc[-6] - 1) * 100
                     
-                    v_col1, v_col2, v_col3 = st.columns(3)
-                    with v_col1: st.metric("量能倍率 (VR)", f"{vr:.2f}", "🔥 爆发" if vr > 1.5 else "⚖️ 平稳")
-                    with v_col2: st.metric("相对强度 (RS)", f"{curr_rs:.6f}", f"5日斜率: {rs_slope_single:+.2f}%")
-                    with v_col3:
-                        rs_tag = "🔥 强 Alpha" if curr_rs > rs_20ma.iloc[-1] else "❄️ 弱 Beta"
-                        st.write(f"**审计判定：{rs_tag}**")
-                        if rs_ratio.iloc[-1] > rs_250ma.iloc[-1]: st.success("✅ 已站上 250MA")
-                        else: st.warning("⚠️ 仍在 250MA 下方")
-
+                    v1, v2, v3 = st.columns(3)
+                    v1.metric("量能倍率 (VR)", f"{vr:.2f}", "🔥 爆发" if vr > 1.5 else "⚖️ 平稳")
+                    v2.metric("相对强度 (RS)", f"{curr_rs:.6f}", f"5日斜率: {slope_single:+.2f}%")
+                    v3.write(f"**审计判定：{'🔥 强 Alpha' if curr_rs > rs_ratio.rolling(20).mean().iloc[-1] else '❄️ 弱 Beta'}**")
+                    
                     fig_rs = go.Figure()
                     fig_rs.add_trace(go.Scatter(x=rs_ratio.index[-250:], y=rs_ratio.values[-250:], name="RS 曲线", line=dict(color='#00ffcc', width=3)))
-                    fig_rs.add_trace(go.Scatter(x=rs_20ma.index[-250:], y=rs_20ma.values[-250:], name="RS 20MA", line=dict(color='white', width=1, dash='dot')))
-                    fig_rs.add_trace(go.Scatter(x=rs_250ma.index[-250:], y=rs_250ma.values[-250:], name="RS 250MA", line=dict(color='orange', width=2, dash='dash')))
-                    fig_rs.update_layout(height=400, template="plotly_dark", legend=dict(orientation="h", y=1.1))
-                    st.plotly_chart(fig_rs, use_container_width=True)
+                    fig_rs.add_trace(go.Scatter(x=rs_ratio.index[-250:], y=rs_ratio.rolling(20).mean().tail(250), name="20MA", line=dict(color='white', dash='dot')))
+                    fig_rs.add_trace(go.Scatter(x=rs_ratio.index[-250:], y=rs_ratio.rolling(250).mean().tail(250), name="250MA", line=dict(color='orange', dash='dash')))
+                    st.plotly_chart(fig_rs.update_layout(height=400, template="plotly_dark", legend=dict(orientation="h", y=1.1)), use_container_width=True)
             except: st.warning("无法审计该标的。")
 
     with tabs[4]:
-        st.subheader("🏛️ 债市重力审计 (Bond Market Audit)")
-        b_col1, b_col2, b_col3 = st.columns(3)
-        with b_col1:
-            move_val = latest.get('move', 0)
-            st.metric("MOVE 指数 (债市VIX)", f"{move_val:.1f}", "🟡 警戒" if move_val > 100 else "🟢 平稳")
-        with b_col2:
-            us2y_val = latest.get('us2y', 0)
-            st.metric("2Y 美债收益率", f"{us2y_val:.2f}%")
-        with b_col3:
-            tp_val = latest.get('term_premium', 0)
-            st.metric("10Y 期限溢价", f"{tp_val:.2f}")
-            
-        st.write("---")
+        st.subheader("🏛️ 债市重力审计")
+        b1, b2, b3 = st.columns(3)
+        b1.metric("MOVE 指数", f"{latest.get('move', 0):.1f}", "🟡 警戒" if latest.get('move', 0) > 100 else "🟢 平稳")
+        b2.metric("2Y 美债收益率", f"{latest.get('us2y', 0):.2f}%")
+        b3.metric("10Y 期限溢价", f"{latest.get('term_premium', 0):.2f}")
         fig_bond = go.Figure()
-        if 'us2y' in df.columns:
-            fig_bond.add_trace(go.Scatter(x=df.index[-120:], y=df['us2y'].tail(120), name="2Y 收益率", line=dict(color='#FF3131', width=3)))
-            fig_bond.add_trace(go.Scatter(x=df.index[-120:], y=df['us2y'].rolling(50).mean().tail(120), name="50MA", line=dict(color='white', dash='dot')))
-        if 'move' in df.columns:
-            fig_bond.add_trace(go.Scatter(x=df.index[-120:], y=df['move'].tail(120), name="MOVE 指数 (右轴)", line=dict(color='#00ffcc', width=2, dash='dash'), yaxis="y2"))
-        
-        fig_bond.update_layout(height=450, template="plotly_dark", hovermode="x unified", yaxis=dict(title="Yield (%)"), yaxis2=dict(title="MOVE Index", overlaying="y", side="right", showgrid=False), legend=dict(orientation="h", y=1.1))
-        st.plotly_chart(fig_bond, use_container_width=True)
+        fig_bond.add_trace(go.Scatter(x=df.index[-120:], y=df['us2y'].tail(120), name="2Y 收益率", line=dict(color='#FF3131', width=3)))
+        fig_bond.add_trace(go.Scatter(x=df.index[-120:], y=df['move'].tail(120), name="MOVE (右轴)", line=dict(color='#00ffcc', width=2, dash='dash'), yaxis="y2"))
+        st.plotly_chart(fig_bond.update_layout(height=450, template="plotly_dark", yaxis2=dict(overlaying="y", side="right", showgrid=False)), use_container_width=True)
 
     with tabs[5]:
-        st.subheader("📊 系统验证 (GSMI vs Nasdaq 周度版)")
-        # --- 核心修正：确保重采样前索引类型正确 ---
-        df_resample = df.copy()
-        df_resample.index = pd.to_datetime(df_resample.index)
-        df_w = df_resample.resample('W-FRI').last().dropna(subset=['gsmi_score', 'qqq'])
-        
-        if not df_w.empty:
-            norm_q = (df_w['qqq'] / df_w['qqq'].iloc[0]) * 100
-            fig_v = go.Figure()
-            fig_v.add_trace(go.Scatter(x=df_w.index, y=df_w['gsmi_score'], name="GSMI 评分", line=dict(color='#00ffcc', width=4), mode='lines+markers'))
-            fig_v.add_trace(go.Scatter(x=df_w.index, y=norm_q, name="QQQ (归一化)", line=dict(color='#FFD700', dash='dot'), yaxis="y2"))
-            st.plotly_chart(fig_v.update_layout(height=400, template="plotly_dark", yaxis=dict(title="GSMI", range=[0,100]), yaxis2=dict(overlaying="y", side="right", showgrid=False)), use_container_width=True)
-        
-        st.write("---")
-        st.subheader("🌉 最后执行确认")
-        hk1, hk2 = st.columns(2)
-        with hk1:
-            st.metric("港元汇率 (USD/HKD)", f"{latest['hkd']:.4f}", "吸金" if latest['hkd'] < 7.80 else "失血")
-            if len(df) > 20:
-                hsi_perf = (latest['hsi']/df['hsi'].iloc[-20] - 1)*100
-                as300_perf = (latest['as300']/df['as300'].iloc[-20] - 1)*100
-                st.write(f"📊 20日动能差 HSI vs AS300: {hsi_perf - as300_perf:+.2f}%")
-        with hk2:
-            st.markdown(f"[沽空比](http://www.aastocks.com/tc/stocks/market/shortselling/securities-eligible.aspx) | [信贷脉冲](https://www.macromicro.me/collections/31/cn-finance-relative/35559/china-credit-impulse-index) | [M1-M2剪刀差](https://www.macromicro.me/charts/260/cn-china-m1-m2)")
-            st.slider("手动录入：大市沽空比率 (%)", 5.0, 35.0, 16.5, 0.1)
+        st.subheader("📊 系统验证")
+        df_w = df.resample('W-FRI').last().dropna(subset=['gsmi_score', 'qqq'])
+        fig_v = go.Figure()
+        fig_v.add_trace(go.Scatter(x=df_w.index, y=df_w['gsmi_score'], name="GSMI 评分", line=dict(color='#00ffcc', width=4), mode='lines+markers'))
+        fig_v.add_trace(go.Scatter(x=df_w.index, y=(df_w['qqq']/df_w['qqq'].iloc[0])*100, name="QQQ (归一化)", line=dict(color='#FFD700', dash='dot'), yaxis="y2"))
+        st.plotly_chart(fig_v.update_layout(height=400, template="plotly_dark", yaxis2=dict(overlaying="y", side="right", showgrid=False)), use_container_width=True)
 
 except Exception as e:
     st.error(f"系统运行错误: {e}")
