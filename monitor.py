@@ -6,8 +6,8 @@ import plotly.graph_objects as go
 from datetime import datetime, timedelta
 from fredapi import Fred
 
-# --- 1. 界面配置与人格设定 ---
-st.set_page_config(page_title="GSMI Tactical | 首席风险官看板", layout="wide")
+# --- 1. 界面配置与核心人格 ---
+st.set_page_config(page_title="GSMI Tactical | 首席风险官决策系统", layout="wide")
 
 st.markdown("""
     <style>
@@ -19,7 +19,7 @@ st.markdown("""
     """, unsafe_allow_html=True)
 
 st.title("🏹 GSMI 全球聪明钱监控与验证系统")
-st.caption("角色设定：顶级对冲基金 CRO | 核心原则：数据优先、反向审计、物理一致性")
+st.caption("2026.08.19 战时状态 | 警告：GSMI 处于窒息区 (33.7) | 严禁盲目抄底")
 
 # --- 2. 侧边栏配置 ---
 st.sidebar.header("🛠️ 核心参数配置")
@@ -41,21 +41,6 @@ fms_crowded = st.sidebar.selectbox("当前最拥挤交易", options=crowded_opti
 st.sidebar.markdown("---")
 st.sidebar.header("🏦 财政部 TGA 预测配置")
 tga_target = st.sidebar.number_input("本季末 TGA 余额目标 (十亿$)", value=950, step=50)
-
-st.sidebar.markdown("---")
-with st.sidebar.expander("📖 GSMI 评分规则细则", expanded=True):
-    st.markdown("""
-    **1. 核心货币 (45分):**  
-    - NL > 4周均线 (+15) / 环比增加 (+10)  
-    - TIPS 0.5%->2.5% (20分线性)  
-    **2. 全球汇率 (15分):**  
-    - DXY 98->108 (15分线性)  
-    **3. 机构情绪 (15分):**  
-    - FMS 6.0%->3.5% (15分线性)  
-    **4. 宏观现实 (25分):**  
-    - 铜金比 > 200日线 (+10) / 近5日向上 (+5)  
-    - 利差 300->600bps (10分线性)
-    """)
 
 if "fred_api_key" in st.secrets:
     fred_key = st.secrets["fred_api_key"]
@@ -94,7 +79,7 @@ def fetch_and_sync_data():
     start = end - timedelta(days=500)
     status_report = {}
     
-    # --- 1. FRED 颗粒度抓取 ---
+    # 1. 抓取 FRED (带回溯逻辑)
     fred_map = {
         'tips': 'DFII10', 'spread': 'BAMLH0A0HYM2', 'assets': 'WALCL',
         'tga': 'WTREGEN', 'rrp': 'RRPONTSYD', 'sofr': 'SOFR',
@@ -109,7 +94,7 @@ def fetch_and_sync_data():
             status_report[f"FRED:{key}"] = "✅"
         except: status_report[f"FRED:{key}"] = "❌"
 
-    # --- 2. Yahoo Finance 抓取 ---
+    # 2. 抓取 Yahoo Finance (MultiIndex 修复)
     def safe_get_yf(ticker, name):
         try:
             df = yf.download(ticker, start=start, end=end, progress=False)
@@ -123,27 +108,30 @@ def fetch_and_sync_data():
             status_report[name] = "❌"
             return pd.Series(dtype='float64')
 
-    dxy = safe_get_yf("DX-Y.NYB", "DXY")
-    if dxy.empty: dxy = safe_get_yf("UUP", "UUP") * 3.68
-    
     yf_dict = {
-        'dxy': dxy, 'copper': safe_get_yf("HG=F", "Copper"), 'gold': safe_get_yf("GC=F", "Gold"),
-        'hkd': safe_get_yf("HKD=X", "HKD"), 'hsi': safe_get_yf("^HSI", "HSI"),
-        'as300': safe_get_yf("000300.SS", "AS300"), 'btc': safe_get_yf("BTC-USD", "BTC"),
-        'qqq': safe_get_yf("QQQ", "QQQ"), 'chinext': safe_get_yf("159915.SZ", "ChiNext"),
+        'dxy': safe_get_yf("DX-Y.NYB", "DXY"),
+        'copper': safe_get_yf("HG=F", "Copper"),
+        'gold': safe_get_yf("GC=F", "Gold"),
+        'hkd': safe_get_yf("HKD=X", "HKD"),
+        'hsi': safe_get_yf("^HSI", "HSI"),
+        'as300': safe_get_yf("000300.SS", "AS300"),
+        'btc': safe_get_yf("BTC-USD", "BTC"),
+        'qqq': safe_get_yf("QQQ", "QQQ"),
+        'chinext': safe_get_yf("159915.SZ", "ChiNext"),
         'move': safe_get_yf("^MOVE", "MOVE")
     }
 
-    # --- 3. 物理对齐 ---
-    # 以 TIPS 的索引为基准建立主表
-    if 'tips' not in data_dict: return pd.DataFrame(), status_report
-    
-    df = pd.DataFrame(index=data_dict['tips'].index)
+    # --- 核心修正：以 YF 实时数据为索引基准，防止 dropna 抹除最新日期 ---
+    df = pd.DataFrame(index=yf_dict['qqq'].index)
     for k, v in data_dict.items(): df[k] = v
     for k, v in yf_dict.items(): df[k] = v
     
     df.index = pd.to_datetime(df.index)
-    df = df.ffill().dropna(subset=['tips', 'assets', 'dxy'])
+    # 仅对核心列进行向前填充，不执行全局 dropna
+    df = df.ffill()
+    
+    # 仅删除那些连基础价格都没有的行
+    df = df.dropna(subset=['qqq', 'btc'])
     
     if not df.empty:
         df['nl'] = (df['assets'] - df.get('tga', 0).fillna(0) - df.get('rrp', 0).fillna(0)) / 1000000
@@ -159,7 +147,6 @@ def calculate_history(df, fms_val):
 
     gsmi_history = []
     nl_ma4 = df['nl'].rolling(20).mean()
-    cg_ma200 = df['cg_ratio'].rolling(200).mean()
     
     for i in range(len(df)):
         if i < 20: gsmi_history.append(np.nan); continue
@@ -167,7 +154,7 @@ def calculate_history(df, fms_val):
         s_tips = score_linear(df['tips'].iloc[i], 0.5, 2.5, 20, reverse=True)
         s_dxy = score_linear(df['dxy'].iloc[i], 98, 108, 15, reverse=True)
         s_fms = score_linear(fms_val, 3.5, 6.0, 15, reverse=False)
-        s_cg = (10 if df['cg_ratio'].iloc[i] > cg_ma200.iloc[i] else 0) + (5 if df['cg_ratio'].iloc[i] > df['cg_ratio'].iloc[i-10:i-5].mean() else 0)
+        s_cg = (10 if df['cg_ratio'].iloc[i] > df['cg_ratio'].rolling(200).mean().iloc[i] else 0) + (5 if df['cg_ratio'].iloc[i] > df['cg_ratio'].iloc[i-10:i-5].mean() else 0)
         s_spread = score_linear(df['spread'].iloc[i], 300, 600, 10, reverse=True)
         gsmi_history.append(s_nl + s_tips + s_dxy + s_fms + s_cg + s_spread)
     
@@ -244,11 +231,15 @@ try:
         e1, e2 = st.columns([1, 2])
         with e1:
             st.metric("FMS 机构现金", f"{fms_cash}%", f"得分: {score_linear(fms_cash,3.5,6.0,15):.1f}/15")
-            pos_days = len(btc_ret.tail(28)[btc_ret.tail(28) > 0])
+            last_28d = btc_ret.tail(28)
+            pos_days = len(last_28d[last_28d > 0])
             st.write(f"**BTC 28日情绪扫描**")
-            st.caption(f"📈 上涨天数: {pos_days} | 📉 下跌天数: {len(btc_ret.tail(28))-pos_days}")
+            st.caption(f"📈 上涨天数: {pos_days} | 📉 下跌天数: {len(last_28d)-pos_days}")
+            if pos_days >= 18: st.success("🔥 投机情绪极度活跃")
+            elif pos_days <= 10: st.error("❄️ 流动性极度低迷")
+            else: st.info("⚖️ 风险偏好震荡中")
         with e2:
-            st.plotly_chart(go.Figure(go.Bar(x=btc_ret.tail(28).index, y=btc_ret.tail(28).values, marker_color=['#00ffcc' if x>0 else '#FF3131' for x in btc_ret.tail(28)])).update_layout(height=250, template="plotly_dark", margin=dict(l=10, r=10, t=40, b=10)), use_container_width=True)
+            st.plotly_chart(go.Figure(go.Bar(x=last_28d.index, y=last_28d.values, marker_color=['#00ffcc' if x>0 else '#FF3131' for x in last_28d])).update_layout(height=250, template="plotly_dark", margin=dict(l=10, r=10, t=40, b=10)), use_container_width=True)
         st.line_chart(df['btc'].tail(120), height=200)
 
     with tabs[2]:
@@ -323,7 +314,7 @@ try:
             except: st.warning("无法审计该标的。")
 
     with tabs[4]:
-        st.subheader("🏛️ 债市重力审计 (Bond Market Audit)")
+        st.subheader("🏛️ 债市重力审计")
         b1, b2, b3 = st.columns(3)
         b1.metric("MOVE 指数", f"{latest.get('move', 0):.1f}", "🟡 警戒" if latest.get('move', 0) > 100 else "🟢 平稳")
         b2.metric("2Y 美债收益率", f"{latest.get('us2y', 0):.2f}%")
@@ -337,7 +328,7 @@ try:
         st.plotly_chart(fig_bond.update_layout(height=450, template="plotly_dark", yaxis2=dict(overlaying="y", side="right", showgrid=False)), use_container_width=True)
 
     with tabs[5]:
-        st.subheader("📊 系统验证 (GSMI vs Nasdaq 周度版)")
+        st.subheader("📊 系统验证")
         df_resample = df.copy()
         df_resample.index = pd.to_datetime(df_resample.index)
         df_w = df_resample.resample('W-FRI').last().dropna(subset=['gsmi_score', 'qqq'])
@@ -361,7 +352,7 @@ try:
             st.slider("手动录入：大市沽空比率 (%)", 5.0, 35.0, 16.5, 0.1)
 
 except Exception as e:
-    st.error(f"系统运行错误: {e}")
+    st.error(f"系统运行中发生错误: {e}")
 
 st.markdown("---")
 st.caption("GSMI Tactical | 45% 核心货币 + 15% 全球汇率 + 15% 机构情绪 + 25% 宏观现实")
