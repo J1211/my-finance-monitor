@@ -94,15 +94,24 @@ def get_tga_forecast(curr_tga_billion, target_val):
 def fetch_and_sync_data():
     end = datetime.now()
     start = end - timedelta(days=500)
-    def safe_get_yf(ticker):
+    status_report = {}
+
+    def safe_get_yf(ticker, name):
         try:
             df = yf.download(ticker, start=start, end=end, progress=False)
-            if df is None or df.empty: return pd.Series(dtype='float64')
+            if df is None or df.empty: 
+                status_report[name] = "❌ 抓取失败"
+                return pd.Series(dtype='float64')
             data = df['Close'].iloc[:, 0] if isinstance(df.columns, pd.MultiIndex) else df['Close']
+            status_report[name] = "✅ 成功"
             return data.ffill()
-        except: return pd.Series(dtype='float64')
+        except:
+            status_report[name] = "❌ 错误"
+            return pd.Series(dtype='float64')
 
-    data_dict = {}
+    # --- 核心修正：预定义所有键，防止 KeyError ---
+    data_dict = {k: pd.Series(dtype='float64') for k in ['tips', 'spread', 'assets', 'tga', 'rrp', 'sofr', 'iorb', 'us2y', 'term_premium']}
+    
     try:
         data_dict['tips'] = fred.get_series('DFII10', start, end)
         data_dict['spread'] = fred.get_series('BAMLH0A0HYM2', start, end)
@@ -111,30 +120,32 @@ def fetch_and_sync_data():
         data_dict['rrp'] = fred.get_series('RRPONTSYD', start, end)
         data_dict['sofr'] = fred.get_series('SOFR', start, end)
         data_dict['iorb'] = fred.get_series('IORB', start, end)
-        # 新增债市指标
         data_dict['us2y'] = fred.get_series('DGS2', start, end)
         data_dict['term_premium'] = fred.get_series('ACMTP10', start, end)
-    except: pass
+        status_report["FRED 数据源"] = "✅ 成功"
+    except Exception as e: 
+        status_report["FRED 数据源"] = f"❌ 失败: {str(e)}"
 
-    dxy_raw = safe_get_yf("DX-Y.NYB")
-    if dxy_raw.empty: dxy_raw = safe_get_yf("UUP") * 3.68
+    dxy_raw = safe_get_yf("DX-Y.NYB", "DXY指数")
+    if dxy_raw.empty: dxy_raw = safe_get_yf("UUP", "DXY备用") * 3.68
     data_dict['dxy'] = dxy_raw
-    data_dict['copper'] = safe_get_yf("HG=F")
-    data_dict['gold'] = safe_get_yf("GC=F")
-    data_dict['hkd'] = safe_get_yf("HKD=X")
-    data_dict['hsi'] = safe_get_yf("^HSI")
-    data_dict['as300'] = safe_get_yf("000300.SS")
-    data_dict['btc'] = safe_get_yf("BTC-USD")
-    data_dict['qqq'] = safe_get_yf("QQQ")
-    data_dict['chinext'] = safe_get_yf("159915.SZ")
-    data_dict['move'] = safe_get_yf("^MOVE") # 债市波动率
+    data_dict['copper'] = safe_get_yf("HG=F", "铜期货")
+    data_dict['gold'] = safe_get_yf("GC=F", "黄金期货")
+    data_dict['hkd'] = safe_get_yf("HKD=X", "港元汇率")
+    data_dict['hsi'] = safe_get_yf("^HSI", "恒生指数")
+    data_dict['as300'] = safe_get_yf("000300.SS", "沪深300")
+    data_dict['btc'] = safe_get_yf("BTC-USD", "比特币")
+    data_dict['qqq'] = safe_get_yf("QQQ", "纳斯达克100")
+    data_dict['chinext'] = safe_get_yf("159915.SZ", "创业板ETF")
+    data_dict['move'] = safe_get_yf("^MOVE", "MOVE指数")
 
-    df = pd.DataFrame(data_dict).ffill().dropna()
+    df = pd.DataFrame(data_dict).ffill().dropna(subset=['tips', 'assets', 'dxy']) # 仅对核心列去空
     if not df.empty:
-        df['nl'] = (df['assets'] - df['tga'] - df['rrp']) / 1000000
+        df['nl'] = (df['assets'] - df['tga'].fillna(0) - df['rrp'].fillna(0)) / 1000000
         df['cg_ratio'] = df['copper'] / df['gold']
-        df['sofr_spread'] = (df['sofr'] - df['iorb']) * 100
-    return df
+        if 'sofr' in df.columns and 'iorb' in df.columns:
+            df['sofr_spread'] = (df['sofr'] - df['iorb']) * 100
+    return df, status_report
 
 def calculate_history(df, fms_val):
     if df.empty: return df
@@ -161,8 +172,12 @@ def calculate_history(df, fms_val):
 # --- 4. 执行逻辑 ---
 
 try:
-    df_raw = fetch_and_sync_data()
-    if df_raw.empty: st.error("数据抓取失败"); st.stop()
+    df_raw, report = fetch_and_sync_data()
+    if df_raw.empty:
+        st.error("❌ 无法获取完整宏观数据。诊断报告：")
+        st.write(report)
+        st.stop()
+        
     df = calculate_history(df_raw, fms_cash)
     latest = df.iloc[-1]
 
@@ -188,9 +203,10 @@ try:
         t_map = {"冷清/低配": "🟢 低位安全", "标配": "🟡 中性观望", "极其拥挤": "🔴 警惕踩踏"}
         st.markdown(f"**关注目标: {target_name}**")
         st.title(t_map.get(target_status, "🟡 中性观望"))
-        sofr_val = latest['sofr_spread']
-        if sofr_val > 0: st.error(f"⚠️ 系统血压异常: SOFR-IORB {sofr_val:+.1f} bps")
-        else: st.success(f"✅ 系统血压正常: SOFR-IORB {sofr_val:+.1f} bps")
+        if 'sofr_spread' in latest:
+            sofr_val = latest['sofr_spread']
+            if sofr_val > 0: st.error(f"⚠️ 系统血压异常: SOFR-IORB {sofr_val:+.1f} bps")
+            else: st.success(f"✅ 系统血压正常: SOFR-IORB {sofr_val:+.1f} bps")
 
     st.markdown("---")
     tabs = st.tabs(["💧 流动性水源", "🧠 情绪与购买力", "🏗️ 现实与防线", "🎯 Alpha 审计 (RS)", "🏛️ 债市审计", "📊 系统验证"])
@@ -203,16 +219,27 @@ try:
         else: st.info(t_msg)
         
         col_t1, col_t2, col_t3 = st.columns(3)
-        col_t1.metric("净流动性 (NL)", f"${latest['nl']:.2f}T", f"评分: {s_nl_latest}/25 | 周变: {latest['nl'] - df['nl'].iloc[-6]:+.3f}T")
-        col_t2.metric("10Y TIPS", f"{latest['tips']:.2f}%", f"评分: {score_linear(latest['tips'],0.5,2.5,20,True):.1f}/20")
-        col_t3.metric("美元指数 (DXY)", f"{latest['dxy']:.2f}", f"评分: {score_linear(latest['dxy'],98,108,15,True):.1f}/15")
+        col_t1.metric("当前 TGA 余额", f"${latest['tga']/1000:.1f}B")
+        col_t2.metric("季末目标位", f"${tga_target}B")
+        col_t3.metric("目标回归缺口", f"{t_gap:+.1f}B", delta_color="normal" if t_gap < 0 else "inverse")
+
+        st.write("---")
+        q1, q2, q3, q4 = st.columns(4)
+        q1.markdown('<div class="quadrant-box">🔵 <b>25分: NL扩张期</b><br>🚀 进攻</div>', unsafe_allow_html=True)
+        q2.markdown('<div class="quadrant-box">🟡 <b>15分: NL滞涨期</b><br>⚠️ 警惕</div>', unsafe_allow_html=True)
+        q3.markdown('<div class="quadrant-box">🟠 <b>10分: NL修复期</b><br>🔍 观察</div>', unsafe_allow_html=True)
+        q4.markdown('<div class="quadrant-box">🔴 <b>0分: NL衰退期</b><br>🛑 空仓</div>', unsafe_allow_html=True)
+
+        m1, m2, m3 = st.columns(3)
+        m1.metric("净流动性 (NL)", f"${latest['nl']:.2f}T", f"评分: {s_nl_latest}/25 | 周变: {latest['nl'] - df['nl'].iloc[-6]:+.3f}T")
+        m2.metric("10Y TIPS", f"{latest['tips']:.2f}%", f"评分: {score_linear(latest['tips'],0.5,2.5,20,True):.1f}/20")
+        m3.metric("美元指数 (DXY)", f"{latest['dxy']:.2f}", f"评分: {score_linear(latest['dxy'],98,108,15,True):.1f}/15")
         
         fig_nl = go.Figure()
         fig_nl.add_trace(go.Scatter(x=df.index, y=df['nl'], name="净流动性(T)", line=dict(color='#00ffcc', width=3)))
         fig_nl.add_trace(go.Scatter(x=df.index, y=df['tips'], name="TIPS (%)", line=dict(color='#FF3131', dash='dot'), yaxis="y2"))
         fig_nl.update_layout(height=350, template="plotly_dark", yaxis=dict(title="NL (T)"), yaxis2=dict(overlaying="y", side="right", showgrid=False))
         st.plotly_chart(fig_nl, use_container_width=True)
-        st.markdown(f"[CESI花旗惊奇指数-TIPS前瞻](https://www.macromicro.me/collections/34/us-stock-relative/55674/us-citi-surprise-index-earnings-revision)")
 
     with tabs[1]:
         st.subheader("🧠 情绪与购买力监控")
@@ -250,9 +277,6 @@ try:
 
     with tabs[3]:
         st.subheader("🎯 Alpha 审计 (Relative Strength)")
-        st.caption("逻辑：寻找正在‘吸血’大盘的领头羊。基准：创业板 ETF (159915.SZ)")
-        
-        # --- 修正：5行比较列表默认值 ---
         st.write("### 🚀 5日斜率 (Z轴) 实时对比表")
         input_cols = st.columns(5)
         tickers = []
@@ -280,7 +304,6 @@ try:
             st.table(res_df)
         
         st.write("---")
-        # --- 修正：单项深度审计默认值与提示 ---
         st.write("### 🔍 单项深度审计图表")
         audit_ticker = st.text_input("输入要详细审计的 ETF 代码(159558.SZ设备/159326.SZ电网/512670.SS空天/515880.SS通信/159566.SZ储能/159530.SZ机器人)", "159558.SZ", key="single_audit")
         if audit_ticker:
@@ -317,40 +340,28 @@ try:
             except: st.warning("无法审计该标的。")
 
     with tabs[4]:
-        # --- 需求：新增债市审计标签页 ---
         st.subheader("🏛️ 债市重力审计 (Bond Market Audit)")
-        st.caption("逻辑：债市是所有资产定价的母体。监控重力的‘量’、‘价’与‘心跳’。")
-        
         b_col1, b_col2, b_col3 = st.columns(3)
         with b_col1:
-            move_val = latest['move']
-            move_status = "🚨 极度恐慌" if move_val > 120 else ("🟡 警戒" if move_val > 100 else "🟢 平稳")
-            st.metric("MOVE 指数 (债市VIX)", f"{move_val:.1f}", move_status)
+            move_val = latest.get('move', 0)
+            st.metric("MOVE 指数 (债市VIX)", f"{move_val:.1f}", "🟡 警戒" if move_val > 100 else "🟢 平稳")
         with b_col2:
-            us2y_val = latest['us2y']
-            us2y_ma50 = df['us2y'].rolling(50).mean().iloc[-1]
-            us2y_status = "📈 重力加速" if us2y_val > us2y_ma50 else "📉 重力减弱"
-            st.metric("2Y 美债收益率", f"{us2y_val:.2f}%", us2y_status)
+            us2y_val = latest.get('us2y', 0)
+            st.metric("2Y 美债收益率", f"{us2y_val:.2f}%")
         with b_col3:
-            tp_val = latest['term_premium']
-            st.metric("10Y 期限溢价", f"{tp_val:.2f}", "信用减值" if tp_val > 0 else "信用溢价")
+            tp_val = latest.get('term_premium', 0)
+            st.metric("10Y 期限溢价", f"{tp_val:.2f}")
             
         st.write("---")
-        # 债市对比图
         fig_bond = go.Figure()
-        fig_bond.add_trace(go.Scatter(x=df.index[-120:], y=df['us2y'].tail(120), name="2Y 收益率 (政策预期)", line=dict(color='#FF3131', width=3)))
-        fig_bond.add_trace(go.Scatter(x=df.index[-120:], y=df['us2y'].rolling(50).mean().tail(120), name="50MA", line=dict(color='white', dash='dot')))
-        fig_bond.add_trace(go.Scatter(x=df.index[-120:], y=df['move'].tail(120), name="MOVE 指数 (右轴)", line=dict(color='#00ffcc', width=2, dash='dash'), yaxis="y2"))
+        if 'us2y' in df.columns:
+            fig_bond.add_trace(go.Scatter(x=df.index[-120:], y=df['us2y'].tail(120), name="2Y 收益率", line=dict(color='#FF3131', width=3)))
+            fig_bond.add_trace(go.Scatter(x=df.index[-120:], y=df['us2y'].rolling(50).mean().tail(120), name="50MA", line=dict(color='white', dash='dot')))
+        if 'move' in df.columns:
+            fig_bond.add_trace(go.Scatter(x=df.index[-120:], y=df['move'].tail(120), name="MOVE 指数 (右轴)", line=dict(color='#00ffcc', width=2, dash='dash'), yaxis="y2"))
         
-        fig_bond.update_layout(
-            height=450, template="plotly_dark",
-            hovermode="x unified",
-            yaxis=dict(title="Yield (%)", gridcolor="#333"),
-            yaxis2=dict(title="MOVE Index", overlaying="y", side="right", showgrid=False),
-            legend=dict(orientation="h", y=1.1)
-        )
+        fig_bond.update_layout(height=450, template="plotly_dark", hovermode="x unified", yaxis=dict(title="Yield (%)"), yaxis2=dict(title="MOVE Index", overlaying="y", side="right", showgrid=False), legend=dict(orientation="h", y=1.1))
         st.plotly_chart(fig_bond, use_container_width=True)
-        st.info("💡 审计逻辑：当 2Y 收益率突破 50MA 且 MOVE 指数突破 120 时，全球风险资产将面临‘物理级’清算。")
 
     with tabs[5]:
         st.subheader("📊 系统验证 (GSMI vs Nasdaq 周度版)")
