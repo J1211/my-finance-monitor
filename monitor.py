@@ -79,31 +79,45 @@ def fetch_and_sync_data():
     start = end - timedelta(days=500)
     status_report = {}
     
-    # 1. 抓取 FRED (带回溯逻辑)
+    # 1. 抓取 FRED (带 30 天容错与底层降级逻辑)
     fred_map = {
         'tips': 'DFII10', 'spread': 'BAMLH0A0HYM2', 'assets': 'WALCL',
         'tga': 'WTREGEN', 'rrp': 'RRPONTSYD', 'sofr': 'SOFR',
-        'iorb': 'IORB', 'us2y': 'DGS2', 'term_premium': 'ACMTP10'
+        'iorb': 'IORB', 'us2y': 'DGS2', 
+        'term_premium': 'THREEFYTP10'  # 替换为美联储官方每日高频模型，防断更
     }
     data_dict = {}
     for key, fid in fred_map.items():
         try:
-            s = fred.get_series(fid, start, end)
-            if s.empty: s = fred.get_series(fid, start, end - timedelta(days=3))
-            data_dict[key] = s
-            status_report[f"FRED:{key}"] = "✅"
-        except: status_report[f"FRED:{key}"] = "❌"
+            # 物理溯源：提取时向左多捞 30 天，防止某些宏观数据存在发布黑洞
+            s = fred.get_series(fid, start - timedelta(days=30), end)
+            if not s.empty:
+                data_dict[key] = s
+                status_report[f"FRED:{key}"] = "✅"
+            else:
+                status_report[f"FRED:{key}"] = "❌ (Empty)"
+        except Exception:
+            # 如果 THREEFYTP10 偶尔抽风，备用回退到原 ACMTP10
+            if key == 'term_premium':
+                try:
+                    s_fallback = fred.get_series('ACMTP10', start - timedelta(days=30), end)
+                    if not s_fallback.empty:
+                        data_dict[key] = s_fallback
+                        status_report[f"FRED:{key}"] = "✅ (ACM)"
+                        continue
+                except: pass
+            status_report[f"FRED:{key}"] = "❌"
 
-    # 2. 抓取 Yahoo Finance (MultiIndex 修复)
+    # 2. 抓取 Yahoo Finance (自动降维防护)
     def safe_get_yf(ticker, name):
         try:
-            df = yf.download(ticker, start=start, end=end, progress=False)
+            df = yf.download(ticker, start=start - timedelta(days=10), end=end, progress=False)
             if df is None or df.empty: 
                 status_report[name] = "❌"
                 return pd.Series(dtype='float64')
             data = df['Close'].iloc[:, 0] if isinstance(df.columns, pd.MultiIndex) else df['Close']
             status_report[name] = "✅"
-            return data.ffill()
+            return data
         except:
             status_report[name] = "❌"
             return pd.Series(dtype='float64')
@@ -121,21 +135,28 @@ def fetch_and_sync_data():
         'move': safe_get_yf("^MOVE", "MOVE")
     }
 
-    # --- 核心修正：以 YF 实时数据为索引基准，防止 dropna 抹除最新日期 ---
-    df = pd.DataFrame(index=yf_dict['qqq'].index)
-    for k, v in data_dict.items(): df[k] = v
-    for k, v in yf_dict.items(): df[k] = v
+    # --- 核心物理重构：7x24 全天候聚合 (Outer Join) ---
+    all_series = {**data_dict, **yf_dict}
+    # pandas DataFrame 接收字典时，会自动求取所有索引的并集，释放周末时间维度
+    df = pd.DataFrame(all_series)
     
-    df.index = pd.to_datetime(df.index)
-    # 仅对核心列进行向前填充，不执行全局 dropna
+    # 清洗时间戳时区，强制对齐绝对时间
+    df.index = pd.to_datetime(df.index).tz_localize(None)
+    
+    # 按照严格请求时间范围切割，切除向左多捞的数据
+    df = df.loc[start.replace(tzinfo=None):end.replace(tzinfo=None)]
+    
+    # 物理静默：周末或节假日没有交易的数据，继承前一个交易日的重力状态
     df = df.ffill()
     
-    # 仅删除那些连基础价格都没有的行
-    df = df.dropna(subset=['qqq', 'btc'])
+    # 只清除在系统最开始连 QQQ 和 BTC 都没有的无效死数据
+    df = df.dropna(subset=['qqq', 'btc'], how='all')
     
+    # 二次合成衍生物理指标
     if not df.empty:
-        df['nl'] = (df['assets'] - df.get('tga', 0).fillna(0) - df.get('rrp', 0).fillna(0)) / 1000000
-        df['cg_ratio'] = df['copper'] / df['gold']
+        df['nl'] = (df.get('assets', 0) - df.get('tga', 0).fillna(0) - df.get('rrp', 0).fillna(0)) / 1000000
+        if 'copper' in df.columns and 'gold' in df.columns:
+            df['cg_ratio'] = df['copper'] / df['gold']
         if 'sofr' in df.columns and 'iorb' in df.columns:
             df['sofr_spread'] = (df['sofr'] - df['iorb']) * 100
             
