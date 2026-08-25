@@ -140,8 +140,11 @@ def fetch_and_sync_data():
     # pandas DataFrame 接收字典时，会自动求取所有索引的并集，释放周末时间维度
     df = pd.DataFrame(all_series)
     
-    # 清洗时间戳时区，强制对齐绝对时间
+   # 清洗时间戳时区，强制对齐绝对时间
     df.index = pd.to_datetime(df.index).tz_localize(None)
+    
+    # 🚨 核心修复：强制时间熵减，恢复时间轴单调递增排列，否则无法切片
+    df = df.sort_index() 
     
     # 按照严格请求时间范围切割，切除向左多捞的数据
     df = df.loc[start.replace(tzinfo=None):end.replace(tzinfo=None)]
