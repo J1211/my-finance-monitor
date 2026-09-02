@@ -22,42 +22,8 @@ st.title("🏹 GSMI 全球聪明钱监控与验证系统")
 
 # --- 动态 GSMI 战术状态机 ---
 # 必须在算出 df 和 latest 变量之后调用
-
-try:
-    latest_date = df.index[-1].strftime('%Y.%m.%d')
-    current_gsmi = latest['gsmi_score']
-    
-    # 物理级状态映射
-    if current_gsmi < 40:
-        zone = "窒息区"
-        action = "严禁盲目抄底 | 强制维持 50% 现金对冲黑洞"
-        alert_style = "error"  # 红色报警
-        icon = "🚨"
-    elif current_gsmi < 60:
-        zone = "重力震荡区"
-        action = "严格控制仓位 | 仅在 200MA 下方寻找左侧吸气位"
-        alert_style = "warning" # 黄色警戒
-        icon = "⚠️"
-    else:
-        zone = "水源扩张区"
-        action = "流动性充裕 | 对‘非你不可’标的执行右侧满仓主攻"
-        alert_style = "success" # 绿色通行
-        icon = "🟢"
-
-    # 抛弃虚弱的 st.caption，使用高对比度的物理告警屏
-    st.markdown(f"""
-    <div style='padding: 10px; border-radius: 5px; border: 1px solid #444; background-color: #1a1c24; margin-bottom: 20px;'>
-        <h4 style='margin:0; color: #eee;'>
-            {icon} {latest_date} 战时状态 | 当前 GSMI: <strong>{current_gsmi:.1f} ({zone})</strong> 
-        </h4>
-        <p style='margin: 5px 0 0 0; font-size: 14px; color: #aaa; font-weight: bold;'>
-            ⚡ 战术执行指令：{action}
-        </p>
-    </div>
-    """, unsafe_allow_html=True)
-
-except Exception:
-    st.caption("系统初始化中，等待数据灌入...")
+# 🚨 在此处打下空间锚点，预留给后面的状态机
+status_placeholder = st.empty()
 
 # --- 2. 侧边栏配置 ---
 st.sidebar.header("🛠️ 核心参数配置")
@@ -240,6 +206,38 @@ try:
     df = calculate_history(df_raw, fms_cash)
     latest = df.iloc[-1]
 
+    # --- 动态 GSMI 战术状态机 (注入顶部锚点) ---
+    try:
+        latest_date = df.index[-1].strftime('%Y.%m.%d')
+        current_gsmi = latest['gsmi_score']
+        
+        # 防止数据量不够导致 nan 崩溃
+        if pd.isna(current_gsmi):
+            status_placeholder.warning("⚠️ 数据回溯期不足 20 天，无法计算 GSMI 重力。")
+        else:
+            if current_gsmi < 40:
+                zone, action, icon = "窒息区", "严禁盲目抄底 | 强制维持 50% 现金对冲", "🚨"
+            elif current_gsmi < 60:
+                zone, action, icon = "重力震荡区", "严格控制仓位 | 在 200MA 下方寻找左侧吸气", "⚠️"
+            else:
+                zone, action, icon = "水源扩张区", "流动性充裕 | 对‘非你不可’标的执行右侧主攻", "🟢"
+
+            # 逆向注入到顶部的 status_placeholder 中
+            status_placeholder.markdown(f"""
+            <div style='padding: 10px; border-radius: 5px; border: 1px solid #444; background-color: #1a1c24; margin-bottom: 20px;'>
+                <h4 style='margin:0; color: #eee;'>
+                    {icon} {latest_date} 战时状态 | 当前 GSMI: <strong>{current_gsmi:.1f} ({zone})</strong> 
+                </h4>
+                <p style='margin: 5px 0 0 0; font-size: 14px; color: #aaa; font-weight: bold;'>
+                    ⚡ 战术执行指令：{action}
+                </p>
+            </div>
+            """, unsafe_allow_html=True)
+
+    except Exception as e:
+        # 如果再次失败，强制吐出真实错误日志，绝不吞噬异常
+        status_placeholder.error(f"🚨 状态机加载发生物理断裂: {e}")
+    
     # 变量初始化
     nl_ma_last = df['nl'].rolling(20).mean().iloc[-1]
     s_nl_latest = (15 if latest['nl'] > nl_ma_last else 0) + (10 if latest['nl'] > df['nl'].iloc[-6] else 0)
