@@ -325,12 +325,21 @@ try:
     with tabs[3]:
         st.subheader("🎯 Alpha 审计 (Relative Strength)")
         
-        # --- 模块 1：战略资产猎杀雷达 ---
+        # --- 模块 1：战略资产猎杀雷达 (动态槽位) ---
         st.write("### 🦅 猎杀雷达：RS 拐点与 200MA 突破监测")
         
-        # 你的战略物理资产池 (铜、铀、电网、液冷封装、油气中游)
-        sniper_tickers = ['COPX', 'URA', '159326.SZ', '159558.SZ', '162411.SZ']
-        benchmark_ticker = 'as300' 
+        # 预设的战略物理资产池
+        default_snipers = ['COPX', 'URA', '159326.SZ', '159516.SZ', '162411.SZ']
+        sniper_cols = st.columns(5)
+        sniper_tickers = []
+        
+        # 生成 5 个动态输入框
+        for i in range(5):
+            val = sniper_cols[i].text_input(f"猎杀槽位 {i+1}", default_snipers[i])
+            if val:
+                sniper_tickers.append(val.strip())
+                
+        benchmark_ticker = 'as300' # 默认 Beta 基准
         
         sniper_results = []
         for t in sniper_tickers:
@@ -342,7 +351,7 @@ try:
                 t_close = t_data['Close'].iloc[:, 0] if isinstance(t_data.columns, pd.MultiIndex) else t_data['Close']
                 t_vol = t_data['Volume'].iloc[:, 0] if isinstance(t_data.columns, pd.MultiIndex) else t_data['Volume']
                 
-                # 计算 200MA (防范上市不足 200 天的新股报错)
+                # 计算 200MA (防范上市不足 200 天的新股)
                 ma200 = t_close.rolling(200).mean()
                 if len(t_close) < 200: continue
                 
@@ -383,7 +392,6 @@ try:
                     "系统指令": action
                 })
             except Exception:
-                # 捕捉所有单个标的运算时的报错，防止全局崩溃
                 pass
 
         if sniper_results:
@@ -393,27 +401,37 @@ try:
             
         st.write("---")
         
-        # --- 模块 2：保留的原有单项深度动能扫描 ---
+        # --- 模块 2：保留的原有单项深度动能扫描 (并恢复图表) ---
         st.write("### 🔍 单项深度动能扫描")
-        audit_ticker = st.text_input("输入要详细审计的 ETF 代码", "159326.SZ", key="single_audit")
+        audit_ticker = st.text_input("输入要详细审计的标的代码", "159326.SZ", key="single_audit")
         if audit_ticker:
             try:
-                a_data = yf.download(audit_ticker, start=df.index[0]-timedelta(days=10), end=df.index[-1], progress=False)
+                # 为了画出 250MA，这里强制往前多抓 350 天的数据
+                a_data = yf.download(audit_ticker, start=df.index[0]-timedelta(days=350), end=df.index[-1], progress=False)
                 if not a_data.empty:
                     a_close = a_data['Close'].iloc[:, 0] if isinstance(a_data.columns, pd.MultiIndex) else a_data['Close']
                     a_vol = a_data['Volume'].iloc[:, 0] if isinstance(a_data.columns, pd.MultiIndex) else a_data['Volume']
                     vr = a_vol.iloc[-1] / a_vol.iloc[-6:-1].mean()
+                    
                     rs_df = pd.DataFrame({'target': a_close, 'base': df['as300']}).ffill().dropna()
                     rs_ratio = rs_df['target'] / rs_df['base']
                     curr_rs = rs_ratio.iloc[-1]
                     slope_single = (curr_rs / rs_ratio.iloc[-6] - 1) * 100
                     
+                    # 输出核心指标
                     v1, v2, v3 = st.columns(3)
                     v1.metric("量能倍率 (VR)", f"{vr:.2f}", "🔥 爆发" if vr > 1.5 else "⚖️ 平稳")
                     v2.metric("相对强度 (RS)", f"{curr_rs:.6f}", f"5日斜率: {slope_single:+.2f}%")
                     v3.write(f"**审计判定：{'🔥 强 Alpha' if curr_rs > rs_ratio.rolling(20).mean().iloc[-1] else '❄️ 弱 Beta'}**")
+                    
+                    # 恢复 RS 物理曲线图表
+                    fig_rs = go.Figure()
+                    fig_rs.add_trace(go.Scatter(x=rs_ratio.index[-250:], y=rs_ratio.values[-250:], name="RS 曲线", line=dict(color='#00ffcc', width=3)))
+                    fig_rs.add_trace(go.Scatter(x=rs_ratio.index[-250:], y=rs_ratio.rolling(20).mean().tail(250), name="20MA", line=dict(color='white', dash='dot')))
+                    fig_rs.add_trace(go.Scatter(x=rs_ratio.index[-250:], y=rs_ratio.rolling(250).mean().tail(250), name="250MA", line=dict(color='orange', width=2, dash='dash')))
+                    st.plotly_chart(fig_rs.update_layout(height=400, template="plotly_dark", legend=dict(orientation="h", y=1.1)), use_container_width=True)
             except Exception:
-                st.warning("系统无法审计该标的，物理特征不匹配。")
+                st.warning("系统无法审计该标的，物理特征不匹配或数据抓取失败。")
 
     with tabs[4]:
         st.subheader("🏛️ 债市重力审计")
