@@ -329,7 +329,7 @@ try:
         st.write("### 🦅 猎杀雷达：RS 拐点与 200MA 突破监测")
         
         # 预设的战略物理资产池
-        default_snipers = ['COPX', 'URA', '159326.SZ', '159516.SZ', '162411.SZ']
+        default_snipers = ['COPX', 'URA', '159326.SZ', '159558.SZ', '162411.SZ']
         sniper_cols = st.columns(5)
         sniper_tickers = []
         
@@ -346,14 +346,22 @@ try:
             try:
                 # 调取充足的历史数据以计算 200MA
                 t_data = yf.download(t, start=df.index[0] - timedelta(days=300), end=df.index[-1], progress=False)
-                if t_data.empty: continue
+                if t_data.empty: 
+                    sniper_results.append({"资产代码": t, "系统指令": "❌ 物理数据抓取为空", "RS前置斜率": "-", "RS当前斜率": "-", "当前价/200MA": "-", "量能倍率(VR)": "-"})
+                    continue
                     
                 t_close = t_data['Close'].iloc[:, 0] if isinstance(t_data.columns, pd.MultiIndex) else t_data['Close']
                 t_vol = t_data['Volume'].iloc[:, 0] if isinstance(t_data.columns, pd.MultiIndex) else t_data['Volume']
                 
+                # 🚨 强制时区粉碎，确保跨国资产（美股/A股）时间轴能完美对齐
+                t_close.index = pd.to_datetime(t_close.index).tz_localize(None)
+                t_vol.index = pd.to_datetime(t_vol.index).tz_localize(None)
+                
                 # 计算 200MA (防范上市不足 200 天的新股)
+                if len(t_close) < 200: 
+                    sniper_results.append({"资产代码": t, "系统指令": "⚠️ 上市不足200天，无引力参考", "RS前置斜率": "-", "RS当前斜率": "-", "当前价/200MA": "-", "量能倍率(VR)": "-"})
+                    continue
                 ma200 = t_close.rolling(200).mean()
-                if len(t_close) < 200: continue
                 
                 # 1. 200MA 突破判定：今日站上且 3 日前在下方
                 is_breakout = (t_close.iloc[-1] > ma200.iloc[-1]) and (t_close.iloc[-4] < ma200.iloc[-4])
@@ -364,7 +372,9 @@ try:
                 
                 # 3. RS 斜率拐点判定
                 rs_df = pd.DataFrame({'target': t_close, 'base': df[benchmark_ticker]}).ffill().dropna()
-                if len(rs_df) < 25: continue
+                if len(rs_df) < 25: 
+                    sniper_results.append({"资产代码": t, "系统指令": "⚠️ 动能对比数据不足", "RS前置斜率": "-", "RS当前斜率": "-", "当前价/200MA": "-", "量能倍率(VR)": "-"})
+                    continue
                 
                 rs_curve = rs_df['target'] / rs_df['base']
                 current_slope = (rs_curve.iloc[-1] / rs_curve.iloc[-10]) - 1
@@ -391,8 +401,9 @@ try:
                     "量能倍率(VR)": f"{vr:.2f}",
                     "系统指令": action
                 })
-            except Exception:
-                pass
+            except Exception as e:
+                # 绝对不静默：如果代码崩溃，把错误直接打印在面板上
+                sniper_results.append({"资产代码": t, "系统指令": f"❌ 运算断裂", "RS前置斜率": "-", "RS当前斜率": "-", "当前价/200MA": "-", "量能倍率(VR)": "-"})
 
         if sniper_results:
             st.table(pd.DataFrame(sniper_results))
