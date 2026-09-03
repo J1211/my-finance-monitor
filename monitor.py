@@ -329,7 +329,7 @@ try:
         st.write("### 🦅 猎杀雷达：RS 拐点与 200MA 突破监测")
         
         # 预设的战略物理资产池
-        default_snipers = ['COPX', 'URA', '159326.SZ', '159558.SZ', '162411.SZ']
+        default_snipers = ['COPX', 'URA', '159326.SZ', '159558.SZ', '512670.SS']
         sniper_cols = st.columns(5)
         sniper_tickers = []
         
