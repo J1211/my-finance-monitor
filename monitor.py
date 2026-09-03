@@ -324,30 +324,78 @@ try:
 
     with tabs[3]:
         st.subheader("🎯 Alpha 审计 (Relative Strength)")
-        st.write("### 🚀 5日斜率 (Z轴) 实时对比表")
-        input_cols = st.columns(5)
-        tickers = [input_cols[i].text_input(f"标的 {i+1}", v) for i, v in enumerate(["159558.SZ", "159326.SZ", "512670.SS", "515880.SS", "159530.SZ"])]
         
-        audit_results = []
-        for t in tickers:
-            if t:
-                try:
-                    t_data = yf.download(t, start=df.index[-40], end=df.index[-1], progress=False)
-                    if not t_data.empty:
-                        t_close = t_data['Close'].iloc[:, 0] if isinstance(t_data.columns, pd.MultiIndex) else t_data['Close']
-                        combined = pd.DataFrame({'target': t_close, 'base': df['chinext']}).ffill().dropna()
-                        combined.index = pd.to_datetime(combined.index)
-                        rs_ratio = combined['target'] / combined['base']
-                        slope = (rs_ratio.iloc[-1] / rs_ratio.iloc[-6] - 1) * 100
-                        audit_results.append({"代码": t, "5日斜率 (%)": round(slope, 2), "状态": "🔥 强 Alpha" if slope > 0 else "❄️ 弱 Beta"})
-                except: pass
+        # --- 模块 1：战略资产猎杀雷达 ---
+        st.write("### 🦅 猎杀雷达：RS 拐点与 200MA 突破监测")
         
-        if audit_results:
-            st.table(pd.DataFrame(audit_results).sort_values(by="5日斜率 (%)", ascending=False))
+        # 你的战略物理资产池 (铜、铀、电网、液冷封装、油气中游)
+        sniper_tickers = ['COPX', 'URA', '159326.SZ', '159558.SZ', '162411.SZ']
+        benchmark_ticker = 'as300' 
         
+        sniper_results = []
+        for t in sniper_tickers:
+            try:
+                # 调取充足的历史数据以计算 200MA
+                t_data = yf.download(t, start=df.index[0] - timedelta(days=300), end=df.index[-1], progress=False)
+                if t_data.empty: continue
+                    
+                t_close = t_data['Close'].iloc[:, 0] if isinstance(t_data.columns, pd.MultiIndex) else t_data['Close']
+                t_vol = t_data['Volume'].iloc[:, 0] if isinstance(t_data.columns, pd.MultiIndex) else t_data['Volume']
+                
+                # 计算 200MA (防范上市不足 200 天的新股报错)
+                ma200 = t_close.rolling(200).mean()
+                if len(t_close) < 200: continue
+                
+                # 1. 200MA 突破判定：今日站上且 3 日前在下方
+                is_breakout = (t_close.iloc[-1] > ma200.iloc[-1]) and (t_close.iloc[-4] < ma200.iloc[-4])
+                
+                # 2. 量能燃料判定：VR > 1.5
+                vr = t_vol.iloc[-1] / t_vol.iloc[-6:-1].mean()
+                is_forceful = vr > 1.5
+                
+                # 3. RS 斜率拐点判定
+                rs_df = pd.DataFrame({'target': t_close, 'base': df[benchmark_ticker]}).ffill().dropna()
+                if len(rs_df) < 25: continue
+                
+                rs_curve = rs_df['target'] / rs_df['base']
+                current_slope = (rs_curve.iloc[-1] / rs_curve.iloc[-10]) - 1
+                prev_slope = (rs_curve.iloc[-10] / rs_curve.iloc[-20]) - 1
+                
+                # 由负转正
+                rs_turned_positive = (prev_slope < 0) and (current_slope > 0)
+                
+                # 综合战术裁决
+                if is_breakout and is_forceful and rs_turned_positive:
+                    action = "🔥 猎杀确认 (全条件达成)"
+                elif rs_turned_positive:
+                    action = "🟡 RS 苏醒 (等待 200MA 突破)"
+                elif is_breakout and not is_forceful:
+                    action = "⚠️ 无量诱多 (VR不足)"
+                else:
+                    action = "❄️ 重力压制中 (蛰伏)"
+                    
+                sniper_results.append({
+                    "资产代码": t,
+                    "RS前置斜率": f"{prev_slope*100:.2f}%",
+                    "RS当前斜率": f"{current_slope*100:.2f}%",
+                    "当前价/200MA": f"{(t_close.iloc[-1]/ma200.iloc[-1]):.2f}",
+                    "量能倍率(VR)": f"{vr:.2f}",
+                    "系统指令": action
+                })
+            except Exception:
+                # 捕捉所有单个标的运算时的报错，防止全局崩溃
+                pass
+
+        if sniper_results:
+            st.table(pd.DataFrame(sniper_results))
+        else:
+            st.info("雷达扫描中：未获取到标的物理数据。")
+            
         st.write("---")
-        st.write("### 🔍 单项深度审计图表")
-        audit_ticker = st.text_input("输入要详细审计的 ETF 代码", "159558.SZ", key="single_audit")
+        
+        # --- 模块 2：保留的原有单项深度动能扫描 ---
+        st.write("### 🔍 单项深度动能扫描")
+        audit_ticker = st.text_input("输入要详细审计的 ETF 代码", "159326.SZ", key="single_audit")
         if audit_ticker:
             try:
                 a_data = yf.download(audit_ticker, start=df.index[0]-timedelta(days=10), end=df.index[-1], progress=False)
@@ -355,8 +403,7 @@ try:
                     a_close = a_data['Close'].iloc[:, 0] if isinstance(a_data.columns, pd.MultiIndex) else a_data['Close']
                     a_vol = a_data['Volume'].iloc[:, 0] if isinstance(a_data.columns, pd.MultiIndex) else a_data['Volume']
                     vr = a_vol.iloc[-1] / a_vol.iloc[-6:-1].mean()
-                    rs_df = pd.DataFrame({'target': a_close, 'base': df['chinext']}).ffill().dropna()
-                    rs_df.index = pd.to_datetime(rs_df.index)
+                    rs_df = pd.DataFrame({'target': a_close, 'base': df['as300']}).ffill().dropna()
                     rs_ratio = rs_df['target'] / rs_df['base']
                     curr_rs = rs_ratio.iloc[-1]
                     slope_single = (curr_rs / rs_ratio.iloc[-6] - 1) * 100
@@ -365,78 +412,8 @@ try:
                     v1.metric("量能倍率 (VR)", f"{vr:.2f}", "🔥 爆发" if vr > 1.5 else "⚖️ 平稳")
                     v2.metric("相对强度 (RS)", f"{curr_rs:.6f}", f"5日斜率: {slope_single:+.2f}%")
                     v3.write(f"**审计判定：{'🔥 强 Alpha' if curr_rs > rs_ratio.rolling(20).mean().iloc[-1] else '❄️ 弱 Beta'}**")
-                    
-                    fig_rs = go.Figure()
-                    fig_rs.add_trace(go.Scatter(x=rs_ratio.index[-250:], y=rs_ratio.values[-250:], name="RS 曲线", line=dict(color='#00ffcc', width=3)))
-                    fig_rs.add_trace(go.Scatter(x=rs_ratio.index[-250:], y=rs_ratio.rolling(20).mean().tail(250), name="20MA", line=dict(color='white', dash='dot')))
-                    fig_rs.add_trace(go.Scatter(x=rs_ratio.index[-250:], y=rs_ratio.rolling(250).mean().tail(250), name="250MA", line=dict(color='orange', width=2, dash='dash')))
-                    st.plotly_chart(fig_rs.update_layout(height=400, template="plotly_dark", legend=dict(orientation="h", y=1.1)), use_container_width=True)
-            except: st.warning("无法审计该标的。")
-
-       # --- 放入 Tab 3 (Alpha 审计) 的微观狙击雷达代码 ---
-
-st.write("### 🦅 猎杀雷达：RS 拐点与 200MA 突破监测")
-
-# 设定你要监控的战略资产池
-sniper_tickers = ['COPX', 'URA', '159326.SZ', '159516.SZ', '512400.SS']
-# 设定大盘基准：A股用 AS300 (沪深300)，美股用 QQQ
-benchmark_ticker = 'as300' # 如果监测美股，请在循环中动态切换为 'qqq'
-
-sniper_results = []
-
-for t in sniper_tickers:
-    try:
-        # 向左多捞 250 天数据以计算 200MA
-        t_data = yf.download(t, start=df.index[0] - timedelta(days=300), end=df.index[-1], progress=False)
-        if t_data.empty: continue
-            
-        t_close = t_data['Close'].iloc[:, 0] if isinstance(t_data.columns, pd.MultiIndex) else t_data['Close']
-        t_vol = t_data['Volume'].iloc[:, 0] if isinstance(t_data.columns, pd.MultiIndex) else t_data['Volume']
-        
-        # 1. 计算 200MA 逃逸状态
-        ma200 = t_close.rolling(200).mean()
-        # 判断：今天站上 200MA，且 3 天前还在 200MA 之下（突破动作）
-        is_breakout = (t_close.iloc[-1] > ma200.iloc[-1]) and (t_close.iloc[-4] < ma200.iloc[-4])
-        
-        # 2. 计算量能燃料 (VR)
-        vr = t_vol.iloc[-1] / t_vol.iloc[-6:-1].mean()
-        is_forceful = vr > 1.5
-        
-        # 3. 计算 RS 斜率拐点
-        # 将标的与基准对齐时间轴
-        rs_df = pd.DataFrame({'target': t_close, 'base': df[benchmark_ticker]}).ffill().dropna()
-        rs_curve = rs_df['target'] / rs_df['base']
-        
-        # 计算 10日动量 (当前斜率) 与 前10日动量 (前置斜率)
-        current_slope = (rs_curve.iloc[-1] / rs_curve.iloc[-10]) - 1
-        prev_slope = (rs_curve.iloc[-10] / rs_curve.iloc[-20]) - 1
-        
-        # 判断：由负转正
-        rs_turned_positive = (prev_slope < 0) and (current_slope > 0)
-        
-        # 战术判定逻辑机
-        if is_breakout and is_forceful and rs_turned_positive:
-            action = "🔥 猎杀确认 (全条件达成)"
-        elif rs_turned_positive:
-            action = "🟡 RS 苏醒 (等待 200MA 突破)"
-        elif is_breakout and not is_forceful:
-            action = "⚠️ 无量诱多 (VR不足)"
-        else:
-            action = "❄️ 重力压制中 (蛰伏)"
-            
-        sniper_results.append({
-            "资产代码": t,
-            "RS 前置斜率": f"{prev_slope*100:.2f}%",
-            "RS 当前斜率": f"{current_slope*100:.2f}%",
-            "当前价/200MA": f"{(t_close.iloc[-1]/ma200.iloc[-1]):.2f}",
-            "量能倍率 (VR)": f"{vr:.2f}",
-            "系统指令": action
-        })
-    except Exception as e:
-        pass
-
-if sniper_results:
-    st.table(pd.DataFrame(sniper_results))
+            except Exception:
+                st.warning("系统无法审计该标的，物理特征不匹配。")
 
     with tabs[4]:
         st.subheader("🏛️ 债市重力审计")
