@@ -373,6 +373,71 @@ try:
                     st.plotly_chart(fig_rs.update_layout(height=400, template="plotly_dark", legend=dict(orientation="h", y=1.1)), use_container_width=True)
             except: st.warning("无法审计该标的。")
 
+       # --- 放入 Tab 3 (Alpha 审计) 的微观狙击雷达代码 ---
+
+st.write("### 🦅 猎杀雷达：RS 拐点与 200MA 突破监测")
+
+# 设定你要监控的战略资产池
+sniper_tickers = ['COPX', 'URA', '159326.SZ', '159516.SZ', '512400.SS']
+# 设定大盘基准：A股用 AS300 (沪深300)，美股用 QQQ
+benchmark_ticker = 'as300' # 如果监测美股，请在循环中动态切换为 'qqq'
+
+sniper_results = []
+
+for t in sniper_tickers:
+    try:
+        # 向左多捞 250 天数据以计算 200MA
+        t_data = yf.download(t, start=df.index[0] - timedelta(days=300), end=df.index[-1], progress=False)
+        if t_data.empty: continue
+            
+        t_close = t_data['Close'].iloc[:, 0] if isinstance(t_data.columns, pd.MultiIndex) else t_data['Close']
+        t_vol = t_data['Volume'].iloc[:, 0] if isinstance(t_data.columns, pd.MultiIndex) else t_data['Volume']
+        
+        # 1. 计算 200MA 逃逸状态
+        ma200 = t_close.rolling(200).mean()
+        # 判断：今天站上 200MA，且 3 天前还在 200MA 之下（突破动作）
+        is_breakout = (t_close.iloc[-1] > ma200.iloc[-1]) and (t_close.iloc[-4] < ma200.iloc[-4])
+        
+        # 2. 计算量能燃料 (VR)
+        vr = t_vol.iloc[-1] / t_vol.iloc[-6:-1].mean()
+        is_forceful = vr > 1.5
+        
+        # 3. 计算 RS 斜率拐点
+        # 将标的与基准对齐时间轴
+        rs_df = pd.DataFrame({'target': t_close, 'base': df[benchmark_ticker]}).ffill().dropna()
+        rs_curve = rs_df['target'] / rs_df['base']
+        
+        # 计算 10日动量 (当前斜率) 与 前10日动量 (前置斜率)
+        current_slope = (rs_curve.iloc[-1] / rs_curve.iloc[-10]) - 1
+        prev_slope = (rs_curve.iloc[-10] / rs_curve.iloc[-20]) - 1
+        
+        # 判断：由负转正
+        rs_turned_positive = (prev_slope < 0) and (current_slope > 0)
+        
+        # 战术判定逻辑机
+        if is_breakout and is_forceful and rs_turned_positive:
+            action = "🔥 猎杀确认 (全条件达成)"
+        elif rs_turned_positive:
+            action = "🟡 RS 苏醒 (等待 200MA 突破)"
+        elif is_breakout and not is_forceful:
+            action = "⚠️ 无量诱多 (VR不足)"
+        else:
+            action = "❄️ 重力压制中 (蛰伏)"
+            
+        sniper_results.append({
+            "资产代码": t,
+            "RS 前置斜率": f"{prev_slope*100:.2f}%",
+            "RS 当前斜率": f"{current_slope*100:.2f}%",
+            "当前价/200MA": f"{(t_close.iloc[-1]/ma200.iloc[-1]):.2f}",
+            "量能倍率 (VR)": f"{vr:.2f}",
+            "系统指令": action
+        })
+    except Exception as e:
+        pass
+
+if sniper_results:
+    st.table(pd.DataFrame(sniper_results))
+
     with tabs[4]:
         st.subheader("🏛️ 债市重力审计")
         b1, b2, b3 = st.columns(3)
