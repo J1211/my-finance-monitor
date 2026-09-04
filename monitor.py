@@ -670,39 +670,41 @@ try:
         
         # CRO 物理光谱定义：四大象限全光谱宽基雷达
         sector_map = {
-            # ================= 象限一：原子收税人 (强物理瓶颈) =================
             "能源/煤炭 (旧世界基石)": "515220.SS",
             "有色金属 (原子源头)": "512400.SS",
             "电网设备 (物理底座)": "159326.SZ",
-            
-            # ================= 象限二：资本开支碰撞 (硅基算力) =================
             "半导体设备 (算力卖铲人)": "159558.SZ",
             "通信/光电液冷 (数据管道)": "515880.SS",
-            
-            # ================= 象限三：长久期与幻觉 (重力牺牲品/探头) =================
             "医药医疗 (长久期负面锚)": "512010.SS",
             "消费白酒 (存量资产负债表)": "512690.SS",
             "中概互联 (离岸流动性温度计)": "513050.SS",
             "机器人 (纯叙事投机温度计)": "159530.SZ",
-            
-            # ================= 象限四：信用与法币代理 (系统水位) =================
             "大金融/银行 (信贷脉冲)": "512800.SS",
             "黄金 (法币脱钩代理)": "518880.SS",
-            
-            # ================= 全球宏观定海神针 =================
             "纳斯达克科技 (全球 Beta)": "QQQ"
         }
         
-        baseline = st.selectbox("选择对标的宏观重力基准", {"沪深300 (A股大盘)": "as300", "纳斯达克 (美股大盘)": "qqq"})
-        baseline_ticker = "as300" if "沪深300" in baseline else "qqq"
+        # 修正宏观基准坐标选择
+        baseline_options = ["沪深300 (A股大盘)", "纳斯达克 (美股大盘)"]
+        baseline = st.selectbox("选择对标的宏观重力基准", baseline_options)
+        
+        # 🚨 核心修复 1：YF 绝对物理坐标锚定
+        baseline_ticker = "000300.SS" if "沪深300" in baseline else "QQQ"
         
         if st.button("📡 启动全行业物理扫描"):
-            with st.spinner("正在进行跨行业流体力学测算..."):
+            with st.spinner("正在进行跨行业流体力学测算 (硬核模式)..."):
                 sector_results = []
                 try:
-                    # 获取大盘基准数据，强制脱离时区并清洗
-                    fetch_start = datetime.now() - timedelta(days=120) # 多捞天数防止节假日黑洞
-                    base_data = yf.download(baseline_ticker, start=fetch_start, end=datetime.now(), progress=False)['Close']
+                    # 🚨 核心修复 2：向左深捞 180 天，彻底填平跨国节假日黑洞
+                    fetch_start = datetime.now() - timedelta(days=180) 
+                    
+                    # 抓取大盘基准
+                    base_raw = yf.download(baseline_ticker, start=fetch_start, end=datetime.now(), progress=False)
+                    if base_raw.empty:
+                        st.error(f"致命错误：宏观基准 {baseline_ticker} 物理数据断联，无法提供引力锚点。")
+                        st.stop()
+                        
+                    base_data = base_raw['Close']
                     if isinstance(base_data, pd.DataFrame): 
                         base_data = base_data.iloc[:, 0]
                     base_data.index = pd.to_datetime(base_data.index).tz_localize(None)
@@ -711,67 +713,68 @@ try:
                     for sector_name, ticker in sector_map.items():
                         try:
                             s_data = yf.download(ticker, start=fetch_start, end=datetime.now(), progress=False)
-                            if s_data.empty: continue
+                            if s_data.empty: 
+                                sector_results.append({"行业板块": sector_name, "代码": ticker, "资金状态判定": "❌ 抓取为空", "RS 20日斜率 (中期)": "-", "RS 5日斜率 (短期)": "-", "偏离 50MA (拥挤度)": "-"})
+                                continue
                             
                             s_close = s_data['Close'].iloc[:, 0] if isinstance(s_data.columns, pd.MultiIndex) else s_data['Close']
                             s_close.index = pd.to_datetime(s_close.index).tz_localize(None)
                             s_close = s_close.ffill().dropna()
                             
-                            # 物理对齐时间轴，只保留双方都有数据的交易日
+                            # 物理对齐时间轴
                             df_merge = pd.DataFrame({'Target': s_close, 'Base': base_data}).ffill().dropna()
-                            if len(df_merge) < 55: 
-                                continue # 数据过短，跳过计算
                             
-                            # 计算相对强度 RS 曲线
+                            # 🚨 核心修复 3：降低交易日门槛至 40，防止跨国比较时因假期抹除数据
+                            if len(df_merge) < 40: 
+                                sector_results.append({"行业板块": sector_name, "代码": ticker, "资金状态判定": f"❌ 有效对齐天数仅 {len(df_merge)}", "RS 20日斜率 (中期)": "-", "RS 5日斜率 (短期)": "-", "偏离 50MA (拥挤度)": "-"})
+                                continue
+                            
                             rs_curve = df_merge['Target'] / df_merge['Base']
                             
-                            # 计算 20 日动量 (中期机构资金流向)
                             rs_20d_slope = (rs_curve.iloc[-1] / rs_curve.iloc[-20]) - 1
-                            # 计算 5 日动量 (短期游资爆发力)
                             rs_5d_slope = (rs_curve.iloc[-1] / rs_curve.iloc[-5]) - 1
                             
-                            # 计算当前价格与 50MA (中期重力线) 的偏离度
                             ma50 = s_close.rolling(50).mean().iloc[-1]
                             price_to_ma50 = (s_close.iloc[-1] / ma50) - 1
                             
-                            # 物理资金状态判定引擎
-                            if rs_20d_slope > 0.03: 
-                                state = "🔥 强势吸筹 (机构净买入)"
-                            elif rs_20d_slope < -0.03: 
-                                state = "🩸 持续失血 (机构净抛售)"
-                            else: 
-                                state = "⚖️ 随波逐流 (纯 Beta)"
+                            if rs_20d_slope > 0.03: state = "🔥 强势吸筹 (机构净买入)"
+                            elif rs_20d_slope < -0.03: state = "🩸 持续失血 (机构净抛售)"
+                            else: state = "⚖️ 随波逐流 (纯 Beta)"
                             
                             sector_results.append({
                                 "行业板块": sector_name,
                                 "代码": ticker,
                                 "资金状态判定": state,
-                                "RS 20日斜率 (中期)": f"{rs_20d_slope*100:+.2f}%",
+                                "RS 20日斜率 (中期)": rs_20d_slope,
                                 "RS 5日斜率 (短期)": f"{rs_5d_slope*100:+.2f}%",
                                 "偏离 50MA (拥挤度)": f"{price_to_ma50*100:+.2f}%"
                             })
-                        except Exception:
-                            pass # 单项抓取失败静默跳过，不影响全局雷达
+                        except Exception as e:
+                            # 🚨 绝对禁止静默：把死亡原因写在脸上
+                            sector_results.append({"行业板块": sector_name, "代码": ticker, "资金状态判定": f"❌ 运算断裂: {str(e)[:15]}", "RS 20日斜率 (中期)": -999, "RS 5日斜率 (短期)": "-", "偏离 50MA (拥挤度)": "-"})
                     
                     if sector_results:
-                        res_df = pd.DataFrame(sector_results).sort_values(by="RS 20日斜率 (中期)", ascending=False)
+                        res_df = pd.DataFrame(sector_results)
+                        # 将数值列转换为显示用的百分比格式，处理错误标记
+                        res_df['排序锚点'] = pd.to_numeric(res_df['RS 20日斜率 (中期)'], errors='coerce').fillna(-999)
+                        res_df = res_df.sort_values(by="排序锚点", ascending=False).drop(columns=['排序锚点'])
+                        
+                        res_df['RS 20日斜率 (中期)'] = res_df['RS 20日斜率 (中期)'].apply(lambda x: f"{x*100:+.2f}%" if isinstance(x, float) and x != -999 else "-")
                         
                         st.markdown("### 📊 行业资金虹吸排行榜")
-                        st.caption("注：按 RS 20日斜率降序排列。排在顶部的行业正在抽干底部的行业血液。距离 50MA 偏离过大代表战术极度拥挤。")
+                        st.caption("注：按 RS 20日斜率降序排列。排在顶部的行业正在抽干底部的血液。出现 ❌ 代表该探头遭遇数据黑洞。")
                         
-                        # 运用底层热力学渲染：绿色代表能量吸入，红色代表能量溃散
                         def color_state(val):
-                            if "吸筹" in val: return 'color: #00ffcc; font-weight: bold;'
-                            elif "失血" in val: return 'color: #FF3131; font-weight: bold;'
+                            if "吸筹" in str(val): return 'color: #00ffcc; font-weight: bold;'
+                            elif "失血" in str(val): return 'color: #FF3131; font-weight: bold;'
+                            elif "❌" in str(val): return 'color: #ff00ff; font-weight: bold;'
                             return 'color: #aaa;'
                             
                         st.dataframe(res_df.style.map(color_state, subset=['资金状态判定']), use_container_width=True)
-                    else:
-                        st.warning("所有标的物理数据抓取失败，请检查网络终端连接。")
                         
                 except Exception as e:
                     st.error(f"基准流体力学数据链断裂: {e}")
-
+    
 except Exception as e:
     st.error(f"系统运行中发生错误: {e}")
 
