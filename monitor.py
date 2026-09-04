@@ -496,7 +496,7 @@ try:
         
         c1, c2 = st.columns([1, 2])
         with c1:
-            target_ticker = st.text_input("输入建仓资产代码 (如 512670.SS)", value="512670.SS")
+            target_ticker = st.text_input("输入建仓资产代码 (如 159326.SZ)", value="159326.SZ")
         with c2:
             # 引入动态生命周期校验
             asset_stage = st.selectbox(
