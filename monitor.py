@@ -265,8 +265,8 @@ try:
             else: st.success(f"✅ 系统血压正常: SOFR-IORB {sofr_val:+.1f} bps")
 
     st.markdown("---")
-    tabs = st.tabs(["💧 流动性水源", "🧠 情绪与购买力", "🏗️ 现实与防线", "🎯 Alpha 审计 (RS)", "🏛️ 债市审计", "📊 系统验证"])
-
+    tabs = st.tabs(["💧 流动性水源", "🧠 情绪与购买力", "🏗️ 现实与防线", "🎯 Alpha 审计 (RS)", "🏛️ 债市审计", "📊 系统验证", "🛡️ 仓位风控"])
+   
     with tabs[0]:
         st.subheader("🏦 核心流动性水源 (NL + TIPS + DXY)")
         t_msg, t_gap, t_risk = get_tga_forecast(latest['tga']/1000, tga_target)
@@ -482,6 +482,101 @@ try:
             st.markdown(f"[沽空比](http://www.aastocks.com/tc/stocks/market/shortselling/securities-eligible.aspx) | [信贷脉冲](https://www.macromicro.me/collections/31/cn-finance-relative/35559/china-credit-impulse-index) | [M1-M2剪刀差](https://www.macromicro.me/charts/260/cn-china-m1-m2)")
             st.slider("手动录入：大市沽空比率 (%)", 5.0, 35.0, 16.5, 0.1)
 
+     with tabs[6]:
+        st.subheader("🛡️ CRO 仓位几何学与止损熔断器")
+        st.markdown("基于 **ATR（真实波动幅度）** 和 **凯利破产风险模型** 的纯物理头寸计算器。")
+        
+        # 风险参数面板
+        r1, r2, r3 = st.columns(3)
+        total_capital = r1.number_input("账户总本金 (¥/$)", value=1000000, step=100000)
+        risk_tolerance = r2.number_input("单笔最大物理亏损容忍度 (%)", value=1.0, step=0.1, max_value=5.0, help="建议不要超过 2%，这是你如果触碰止损线，总资产将折损的比例。")
+        risk_multiplier = r3.number_input("止损宽度 (倍数 ATR)", value=2.0, step=0.1, help="常规设定为 2 倍 ATR。过窄容易被噪音洗盘，过宽会极大压缩你的可买仓位。")
+        
+        st.write("---")
+        
+        # 执行标的输入
+        target_ticker = st.text_input("输入准备建仓的资产代码 (如 159326.SZ, COPX)", value="159326.SZ")
+        
+        # 🚨 CRO 物理黑名单拦截
+        blacklisted_tickers = []
+        
+        if target_ticker in blacklisted_tickers:
+            st.error(f"🚨 CRO 强制拦截：{target_ticker} 处于系统物理黑名单中 (无自由现金流/财政黑洞)。禁止为其分配任何资金。")
+        elif target_ticker:
+            try:
+                # 抓取过去 60 天数据以计算平滑 ATR
+                p_data = yf.download(target_ticker, start=df.index[0] - timedelta(days=90), end=df.index[-1], progress=False)
+                
+                if not p_data.empty:
+                    # 修复 MultiIndex
+                    close_col = p_data['Close'].iloc[:, 0] if isinstance(p_data.columns, pd.MultiIndex) else p_data['Close']
+                    high_col = p_data['High'].iloc[:, 0] if isinstance(p_data.columns, pd.MultiIndex) else p_data['High']
+                    low_col = p_data['Low'].iloc[:, 0] if isinstance(p_data.columns, pd.MultiIndex) else p_data['Low']
+                    
+                    # 计算 TR (True Range)
+                    prev_close = close_col.shift(1)
+                    tr1 = high_col - low_col
+                    tr2 = (high_col - prev_close).abs()
+                    tr3 = (low_col - prev_close).abs()
+                    tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+                    
+                    # 计算 14 日 ATR
+                    atr = tr.rolling(14).mean().iloc[-1]
+                    current_price = close_col.iloc[-1]
+                    
+                    if pd.isna(atr) or current_price == 0:
+                        st.warning("数据不足或价格异常，无法计算 ATR。")
+                    else:
+                        # --- 核心物理算式 ---
+                        # 1. 绝对止损金额
+                        stop_loss_distance = atr * risk_multiplier
+                        hard_stop_price = current_price - stop_loss_distance
+                        
+                        # 2. 破产风险换算
+                        max_loss_amount = total_capital * (risk_tolerance / 100)
+                        
+                        # 3. 仓位倒推
+                        shares_to_buy = int(max_loss_amount / stop_loss_distance)
+                        
+                        # 如果是 A股/港股，强制规整为 100 股（一手）的整数倍
+                        if ".SZ" in target_ticker or ".SS" in target_ticker or ".HK" in target_ticker:
+                            shares_to_buy = (shares_to_buy // 100) * 100
+                            
+                        # 4. 真实资金占用
+                        total_exposure = shares_to_buy * current_price
+                        exposure_pct = (total_exposure / total_capital) * 100
+                        
+                        # 如果计算出的资金占用超过了总本金（通常发生在极低波动的资产上），强制降至满仓限制
+                        if total_exposure > total_capital:
+                            shares_to_buy = int(total_capital / current_price)
+                            if ".SZ" in target_ticker or ".SS" in target_ticker or ".HK" in target_ticker:
+                                shares_to_buy = (shares_to_buy // 100) * 100
+                            total_exposure = shares_to_buy * current_price
+                            exposure_pct = (total_exposure / total_capital) * 100
+                            st.info("💡 提示：该资产波动极低，按风险模型计算的资金已超总本金，已强制切断至 100% 仓位上限。")
+                        
+                        # 输出物理执行指令
+                        st.write("### ⚙️ 战术执行参数生成")
+                        metrics_cols = st.columns(4)
+                        metrics_cols[0].metric("当前标的价", f"{current_price:.3f}")
+                        metrics_cols[1].metric("14日物理波动 (ATR)", f"{atr:.3f}", "均值回放依据")
+                        metrics_cols[2].metric("绝对止损线 (必须硬编码)", f"{hard_stop_price:.3f}", f"跌破即刻无条件清仓", delta_color="inverse")
+                        metrics_cols[3].metric("最大允许亏损金", f"{max_loss_amount:,.2f}")
+                        
+                        st.markdown(f"""
+                        <div class='quadrant-box' style='background-color: #112211; border-color: #00ffcc;'>
+                            <h3 style='color: #00ffcc; margin-bottom: 5px;'>🚀 最终执行指令</h3>
+                            <p style='font-size: 18px; margin: 0;'>
+                                买入上限：<strong>{shares_to_buy:,} 股/份</strong> <br>
+                                资金占用：<strong>{total_exposure:,.2f} ({exposure_pct:.1f}%)</strong>
+                            </p>
+                        </div>
+                        """, unsafe_allow_html=True)
+                        
+                        st.caption("CRO 物理纪律：当你建仓的那一秒，必须同时在券商系统中挂单设置止损线。你的大脑不可靠，让硅基系统执行止损。")
+            except Exception as e:
+                st.warning(f"数据处理发生物理断裂: {e}")
+                
 except Exception as e:
     st.error(f"系统运行中发生错误: {e}")
 
