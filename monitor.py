@@ -524,69 +524,79 @@ try:
             elif "C. 奇点兑现" in asset_stage:
                 st.success("✅ CRO 物理匹配：具备真实 FCF 的资产是高重力时代的优质收税人，准许按常规参数测算。")
 
+            
             try:
-                # 抓取过去 90 天数据以计算平滑 ATR
-                p_data = yf.download(target_ticker, start=df.index[0] - timedelta(days=90), end=df.index[-1], progress=False)
+                # 强制脱离主 df 依赖，独立捞取 150 天，确保绝对有 14 个有效交易日
+                fetch_start = datetime.now() - timedelta(days=150)
+                p_data = yf.download(target_ticker, start=fetch_start, end=datetime.now(), progress=False)
                 
                 if not p_data.empty:
-                    close_col = p_data['Close'].iloc[:, 0] if isinstance(p_data.columns, pd.MultiIndex) else p_data['Close']
-                    high_col = p_data['High'].iloc[:, 0] if isinstance(p_data.columns, pd.MultiIndex) else p_data['High']
-                    low_col = p_data['Low'].iloc[:, 0] if isinstance(p_data.columns, pd.MultiIndex) else p_data['Low']
+                    # 🚨 核心修复：暴力清洗 Yahoo Finance 经常缺失的 High/Low 数据空洞
+                    p_data = p_data.ffill().dropna()
                     
-                    # 强制时区对齐，防止索引错乱
-                    close_col.index = pd.to_datetime(close_col.index).tz_localize(None)
-                    high_col.index = pd.to_datetime(high_col.index).tz_localize(None)
-                    low_col.index = pd.to_datetime(low_col.index).tz_localize(None)
-                    
-                    prev_close = close_col.shift(1)
-                    tr1 = high_col - low_col
-                    tr2 = (high_col - prev_close).abs()
-                    tr3 = (low_col - prev_close).abs()
-                    tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
-                    
-                    atr = tr.rolling(14).mean().iloc[-1]
-                    current_price = close_col.iloc[-1]
-                    
-                    if pd.isna(atr) or current_price == 0:
-                        st.error("数据回溯不足或标的价格异常，无法计算 ATR。")
+                    if len(p_data) < 15:
+                        st.error(f"物理有效数据点仅剩 {len(p_data)} 天，不足以计算 14 日 ATR。该资产可能刚上市，或处于长期停牌状态。")
                     else:
-                        stop_loss_distance = atr * risk_multiplier
-                        hard_stop_price = current_price - stop_loss_distance
-                        max_loss_amount = total_capital * (risk_tolerance / 100)
+                        close_col = p_data['Close'].iloc[:, 0] if isinstance(p_data.columns, pd.MultiIndex) else p_data['Close']
+                        high_col = p_data['High'].iloc[:, 0] if isinstance(p_data.columns, pd.MultiIndex) else p_data['High']
+                        low_col = p_data['Low'].iloc[:, 0] if isinstance(p_data.columns, pd.MultiIndex) else p_data['Low']
                         
-                        shares_to_buy = int(max_loss_amount / stop_loss_distance)
-                        if ".SZ" in target_ticker or ".SS" in target_ticker or ".HK" in target_ticker:
-                            shares_to_buy = (shares_to_buy // 100) * 100
+                        # 强制时区对齐，防止索引错乱
+                        close_col.index = pd.to_datetime(close_col.index).tz_localize(None)
+                        high_col.index = pd.to_datetime(high_col.index).tz_localize(None)
+                        low_col.index = pd.to_datetime(low_col.index).tz_localize(None)
+                        
+                        prev_close = close_col.shift(1)
+                        tr1 = high_col - low_col
+                        tr2 = (high_col - prev_close).abs()
+                        tr3 = (low_col - prev_close).abs()
+                        tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+                        
+                        atr = tr.rolling(14).mean().iloc[-1]
+                        current_price = close_col.iloc[-1]
+                        
+                        if pd.isna(atr) or current_price == 0:
+                            st.error("洗盘后仍然存在不可修复的价格黑洞，计算物理断裂。")
+                        else:
+                            stop_loss_distance = atr * risk_multiplier
+                            hard_stop_price = current_price - stop_loss_distance
+                            max_loss_amount = total_capital * (risk_tolerance / 100)
                             
-                        total_exposure = shares_to_buy * current_price
-                        exposure_pct = (total_exposure / total_capital) * 100
-                        
-                        if total_exposure > total_capital:
-                            shares_to_buy = int(total_capital / current_price)
+                            shares_to_buy = int(max_loss_amount / stop_loss_distance)
                             if ".SZ" in target_ticker or ".SS" in target_ticker or ".HK" in target_ticker:
                                 shares_to_buy = (shares_to_buy // 100) * 100
+                                
                             total_exposure = shares_to_buy * current_price
                             exposure_pct = (total_exposure / total_capital) * 100
-                            st.info("💡 该资产极低波动，按风险模型计算已超总本金，强行截断至 100% 满仓限制。")
-                        
-                        st.write("### ⚙️ 战术执行参数")
-                        metrics_cols = st.columns(4)
-                        metrics_cols[0].metric("当前标的价", f"{current_price:.3f}")
-                        metrics_cols[1].metric("14日物理波动 (ATR)", f"{atr:.3f}")
-                        metrics_cols[2].metric("绝对止损线 (硬编码)", f"{hard_stop_price:.3f}", f"回撤 {risk_multiplier} 倍 ATR", delta_color="inverse")
-                        metrics_cols[3].metric("最大允许亏损金额", f"{max_loss_amount:,.2f}")
-                        
-                        st.markdown(f"""
-                        <div class='quadrant-box' style='background-color: #112211; border-color: #00ffcc;'>
-                            <h3 style='color: #00ffcc; margin-bottom: 5px;'>🚀 最终物理买入指令</h3>
-                            <p style='font-size: 18px; margin: 0;'>
-                                买入上限：<strong>{shares_to_buy:,} 股/份</strong> <br>
-                                资金占用：<strong>{total_exposure:,.2f} ({exposure_pct:.1f}%)</strong>
-                            </p>
-                        </div>
-                        """, unsafe_allow_html=True)
+                            
+                            if total_exposure > total_capital:
+                                shares_to_buy = int(total_capital / current_price)
+                                if ".SZ" in target_ticker or ".SS" in target_ticker or ".HK" in target_ticker:
+                                    shares_to_buy = (shares_to_buy // 100) * 100
+                                total_exposure = shares_to_buy * current_price
+                                exposure_pct = (total_exposure / total_capital) * 100
+                                st.info("💡 该资产极低波动，按风险模型计算已超总本金，强行截断至 100% 满仓限制。")
+                            
+                            st.write("### ⚙️ 战术执行参数")
+                            metrics_cols = st.columns(4)
+                            metrics_cols[0].metric("当前标的价", f"{current_price:.3f}")
+                            metrics_cols[1].metric("14日物理波动 (ATR)", f"{atr:.3f}")
+                            metrics_cols[2].metric("绝对止损线 (硬编码)", f"{hard_stop_price:.3f}", f"回撤 {risk_multiplier} 倍 ATR", delta_color="inverse")
+                            metrics_cols[3].metric("最大允许亏损金额", f"{max_loss_amount:,.2f}")
+                            
+                            st.markdown(f"""
+                            <div class='quadrant-box' style='background-color: #112211; border-color: #00ffcc;'>
+                                <h3 style='color: #00ffcc; margin-bottom: 5px;'>🚀 最终物理买入指令</h3>
+                                <p style='font-size: 18px; margin: 0;'>
+                                    买入上限：<strong>{shares_to_buy:,} 股/份</strong> <br>
+                                    资金占用：<strong>{total_exposure:,.2f} ({exposure_pct:.1f}%)</strong>
+                                </p>
+                            </div>
+                            """, unsafe_allow_html=True)
+                else:
+                    st.error("数据抓取完全为空，请检查代码是否正确（如后缀 .SS/.SZ）。")
             except Exception as e:
-                st.error(f"计算发生物理断裂: {e}") 
+                st.error(f"计算发生物理断裂: {e}")
                 
 except Exception as e:
     st.error(f"系统运行中发生错误: {e}")
