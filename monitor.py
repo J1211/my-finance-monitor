@@ -597,7 +597,73 @@ try:
                     st.error("数据抓取完全为空，请检查代码是否正确（如后缀 .SS/.SZ）。")
             except Exception as e:
                 st.error(f"计算发生物理断裂: {e}")
-                
+# ==========================================
+        # 追加模块：资产流体力学 (相关性维度坍塌检测)
+        # ==========================================
+        st.write("---")
+        st.subheader("🕸️ 资产流体力学：组合维度坍塌检测")
+        st.markdown("计算持仓池底层物理相关性。如果资产间相关系数 **> 0.8**，意味着你正在同一个雷区重复下注。")
+        
+        corr_input = st.text_input("输入当前持仓或拟建仓组合 (逗号分隔)", value="159326.SZ, 159516.SZ, COPX, URA, 162411.SZ")
+        
+        if corr_input:
+            corr_tickers = [x.strip() for x in corr_input.split(",") if x.strip()]
+            if len(corr_tickers) > 1:
+                try:
+                    # 抓取过去 60 天的收盘价来计算短期真实相关性
+                    c_data = yf.download(corr_tickers, start=datetime.now() - timedelta(days=90), end=datetime.now(), progress=False)
+                    
+                    if not c_data.empty:
+                        # 修复 Yahoo Finance 单/多标的返回结构的物理差异
+                        if isinstance(c_data.columns, pd.MultiIndex):
+                            c_close = c_data['Close']
+                        else:
+                            c_close = pd.DataFrame({corr_tickers[0]: c_data['Close']})
+                            
+                        # 物理清洗：时区对齐与空值过滤
+                        c_close.index = pd.to_datetime(c_close.index).tz_localize(None)
+                        c_close = c_close.ffill().dropna()
+                        
+                        # 计算每日收益率并得出相关性矩阵 (Pearson)
+                        returns = c_close.pct_change().dropna()
+                        corr_matrix = returns.corr()
+                        
+                        # 检测是否存在“维度坍塌” (相关性 > 0.8)
+                        collapse_pairs = []
+                        for i in range(len(corr_matrix.columns)):
+                            for j in range(i+1, len(corr_matrix.columns)):
+                                if corr_matrix.iloc[i, j] > 0.8:
+                                    collapse_pairs.append(f"{corr_matrix.columns[i]} & {corr_matrix.columns[j]} (相关系数: {corr_matrix.iloc[i, j]:.2f})")
+                        
+                        if collapse_pairs:
+                            st.error("🚨 致命风控警告：检测到组合维度坍塌！以下资产底层相关性极高，遭遇宏观重力抛售时将产生同向踩踏：")
+                            for pair in collapse_pairs:
+                                st.write(f"- {pair}")
+                        else:
+                            st.success("✅ 组合正交化良好：未检测到极度相关的资产对，防线具备物理层次。")
+                        
+                        # 渲染热力图
+                        fig_corr = go.Figure(data=go.Heatmap(
+                            z=corr_matrix.values,
+                            x=corr_matrix.columns,
+                            y=corr_matrix.columns,
+                            colorscale='RdBu',
+                            zmin=-1, zmax=1,
+                            text=np.round(corr_matrix.values, 2),
+                            texttemplate="%{text}",
+                            hoverinfo="text"
+                        ))
+                        fig_corr.update_layout(
+                            height=400, 
+                            template="plotly_dark",
+                            title="近 60 日底层物理相关系数矩阵 (-1 至 1)"
+                        )
+                        st.plotly_chart(fig_corr, use_container_width=True)
+                except Exception as e:
+                    st.warning(f"相关性计算发生断裂: {e}")
+            else:
+                st.info("至少需要输入 2 个标的才能计算相关性。")
+
 except Exception as e:
     st.error(f"系统运行中发生错误: {e}")
 
