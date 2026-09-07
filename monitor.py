@@ -417,11 +417,16 @@ try:
         audit_ticker = st.text_input("输入要详细审计的标的代码", "159326.SZ", key="single_audit")
         if audit_ticker:
             try:
-                # 为了画出 250MA，这里强制往前多抓 350 天的数据
-                a_data = yf.download(audit_ticker, start=df.index[0]-timedelta(days=350), end=df.index[-1], progress=False)
+                # 往左深捞 300 天，确保 200MA 有足够的数据计算
+                a_data = yf.download(audit_ticker, start=df.index[0]-timedelta(days=300), end=df.index[-1], progress=False)
                 if not a_data.empty:
                     a_close = a_data['Close'].iloc[:, 0] if isinstance(a_data.columns, pd.MultiIndex) else a_data['Close']
                     a_vol = a_data['Volume'].iloc[:, 0] if isinstance(a_data.columns, pd.MultiIndex) else a_data['Volume']
+                    
+                    # 🚨 时区清洗，防止单项标的与 A股大盘合并时发生断裂
+                    a_close.index = pd.to_datetime(a_close.index).tz_localize(None)
+                    a_vol.index = pd.to_datetime(a_vol.index).tz_localize(None)
+                    
                     vr = a_vol.iloc[-1] / a_vol.iloc[-6:-1].mean()
                     
                     rs_df = pd.DataFrame({'target': a_close, 'base': df['as300']}).ffill().dropna()
@@ -437,13 +442,18 @@ try:
                     
                     # 恢复 RS 物理曲线图表
                     fig_rs = go.Figure()
+                    
+                    # 界面视图保持展现最近 250 个交易日，但核心引力线已替换为 200MA
                     fig_rs.add_trace(go.Scatter(x=rs_ratio.index[-250:], y=rs_ratio.values[-250:], name="RS 曲线", line=dict(color='#00ffcc', width=3)))
-                    fig_rs.add_trace(go.Scatter(x=rs_ratio.index[-250:], y=rs_ratio.rolling(20).mean().tail(250), name="20MA", line=dict(color='white', dash='dot')))
-                    fig_rs.add_trace(go.Scatter(x=rs_ratio.index[-250:], y=rs_ratio.rolling(250).mean().tail(250), name="250MA", line=dict(color='orange', width=2, dash='dash')))
+                    fig_rs.add_trace(go.Scatter(x=rs_ratio.index[-250:], y=rs_ratio.rolling(20).mean().tail(250), name="20MA (短期生命线)", line=dict(color='white', dash='dot')))
+                    
+                    # 🚨 核心修改处：将 rolling(250) 替换为 rolling(200)，统一系统重力刻度
+                    fig_rs.add_trace(go.Scatter(x=rs_ratio.index[-250:], y=rs_ratio.rolling(200).mean().tail(250), name="200MA (引力场边界)", line=dict(color='orange', width=2, dash='dash')))
+                    
                     st.plotly_chart(fig_rs.update_layout(height=400, template="plotly_dark", legend=dict(orientation="h", y=1.1)), use_container_width=True)
-            except Exception:
-                st.warning("系统无法审计该标的，物理特征不匹配或数据抓取失败。")
-
+            except Exception as e:
+                st.warning(f"系统无法审计该标的，物理断裂原因: {e}")
+        
     with tabs[4]:
         st.subheader("🏛️ 债市重力审计")
         b1, b2, b3 = st.columns(3)
