@@ -614,7 +614,7 @@ try:
         st.subheader("🕸️ 资产流体力学：组合维度坍塌检测")
         st.markdown("计算持仓池底层物理相关性。如果资产间相关系数 **> 0.8**，意味着你正在同一个雷区重复下注。")
         
-        corr_input = st.text_input("输入当前持仓或拟建仓组合 (逗号分隔)", value="159326.SZ, 159516.SZ, COPX, URA, 162411.SZ")
+        corr_input = st.text_input("输入当前持仓或拟建仓组合 (逗号分隔)", value="515880.SS, 159558.SZ, 159326.SZ, 512400.SS, 512670.SS")
         
         if corr_input:
             corr_tickers = [x.strip() for x in corr_input.split(",") if x.strip()]
