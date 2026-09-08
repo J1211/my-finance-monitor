@@ -469,7 +469,9 @@ try:
         st.plotly_chart(fig_bond.update_layout(height=450, template="plotly_dark", yaxis2=dict(overlaying="y", side="right", showgrid=False)), use_container_width=True)
 
     with tabs[5]:
-        st.subheader("📊 系统验证")
+        st.subheader("📊 系统验证与宏观黑匣子")
+        
+        # --- 1. 原有 GSMI 验证模块 ---
         df_resample = df.copy()
         df_resample.index = pd.to_datetime(df_resample.index)
         df_w = df_resample.resample('W-FRI').last().dropna(subset=['gsmi_score', 'qqq'])
@@ -477,9 +479,59 @@ try:
             fig_v = go.Figure()
             fig_v.add_trace(go.Scatter(x=df_w.index, y=df_w['gsmi_score'], name="GSMI 评分", line=dict(color='#00ffcc', width=4), mode='lines+markers'))
             fig_v.add_trace(go.Scatter(x=df_w.index, y=(df_w['qqq']/df_w['qqq'].iloc[0])*100, name="QQQ (归一化)", line=dict(color='#FFD700', dash='dot'), yaxis="y2"))
-            st.plotly_chart(fig_v.update_layout(height=400, template="plotly_dark", yaxis2=dict(overlaying="y", side="right", showgrid=False)), use_container_width=True)
+            st.plotly_chart(fig_v.update_layout(height=350, template="plotly_dark", yaxis2=dict(overlaying="y", side="right", showgrid=False), title="GSMI 重力评分 vs 纳斯达克 Beta 轨迹"), use_container_width=True)
         
         st.write("---")
+        
+        # --- 2. 新增：系统血压 (SOFR-IORB) 心电图与黑匣子 ---
+        st.subheader("🩸 底层管网血压心电图 (SOFR - IORB)")
+        st.markdown("监测美元回购市场的物理断裂史。**> 0 bps 代表流动性休克（大动脉破裂），触发强制清仓。**")
+        
+        if 'sofr_spread' in df.columns:
+            fig_bp = go.Figure()
+            
+            # 绘制基础血压曲线
+            fig_bp.add_trace(go.Scatter(
+                x=df.index, y=df['sofr_spread'], 
+                name="SOFR-IORB (bps)", 
+                line=dict(color='#00ffcc', width=2),
+                fill='tozeroy', fillcolor='rgba(0, 255, 204, 0.1)'
+            ))
+            
+            # 划定物理死亡线 (0 bps)
+            fig_bp.add_hline(y=0, line_dash="dash", line_color="#FF3131", annotation_text="休克红线 (0 bps)", annotation_position="top left")
+            
+            # 提取并标记所有 > 0 的休克点 (红色 X 标记)
+            shock_points = df[df['sofr_spread'] > 0]
+            if not shock_points.empty:
+                fig_bp.add_trace(go.Scatter(
+                    x=shock_points.index, y=shock_points['sofr_spread'],
+                    mode='markers', name="休克爆表点",
+                    marker=dict(color='#FF3131', size=8, symbol='x')
+                ))
+                
+            fig_bp.update_layout(height=350, template="plotly_dark", yaxis_title="息差 (bps)", margin=dict(l=10, r=10, t=30, b=10))
+            st.plotly_chart(fig_bp, use_container_width=True)
+            
+            # --- 3. 异常事件黑匣子日志 ---
+            st.write("### 🚨 近期休克事件日志 (过去 90 天)")
+            recent_shocks = shock_points[shock_points.index > (datetime.now() - timedelta(days=90))]
+            
+            if not recent_shocks.empty:
+                log_df = recent_shocks[['sofr_spread']].copy()
+                log_df.index = log_df.index.strftime('%Y-%m-%d')
+                log_df.columns = ['血压读数 (bps)']
+                log_df['物理状态'] = "💥 管道破裂 (触发清仓)"
+                # 降序排列，最新的排在最上面
+                st.table(log_df.sort_index(ascending=False))
+            else:
+                st.success("✅ 过去 90 天内，底层回购管道未发生物理断裂。")
+        else:
+            st.warning("SOFR 或 IORB 数据缺失，无法生成血压心电图。")
+            
+        st.write("---")
+        
+        # --- 4. 原有最后执行确认模块 ---
         st.subheader("🌉 最后执行确认")
         hk1, hk2 = st.columns(2)
         with hk1:
@@ -491,7 +543,7 @@ try:
         with hk2:
             st.markdown(f"[沽空比](http://www.aastocks.com/tc/stocks/market/shortselling/securities-eligible.aspx) | [信贷脉冲](https://www.macromicro.me/collections/31/cn-finance-relative/35559/china-credit-impulse-index) | [M1-M2剪刀差](https://www.macromicro.me/charts/260/cn-china-m1-m2)")
             st.slider("手动录入：大市沽空比率 (%)", 5.0, 35.0, 16.5, 0.1)
-
+    
     with tabs[6]:
         st.subheader("🛡️ CRO 仓位几何学与动态重力风控")
         st.markdown("基于 **ATR (真实波动)** 与 **生命周期匹配** 的头寸计算器。")
