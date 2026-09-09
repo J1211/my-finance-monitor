@@ -161,17 +161,39 @@ def fetch_and_sync_data():
     # 只清除在系统最开始连 QQQ 和 BTC 都没有的无效死数据
     df = df.dropna(subset=['qqq', 'btc'], how='all')
     
-    # 二次合成衍生物理指标
+    # --- 核心物理重构：7x24 全天候聚合 (Outer Join) ---
+    all_series = {**data_dict, **yf_dict}
+    df = pd.DataFrame(all_series)
+    
+    # 清洗时间戳时区，强制对齐绝对时间
+    df.index = pd.to_datetime(df.index).tz_localize(None)
+    df = df.sort_index() 
+    df = df.loc[start.replace(tzinfo=None):end.replace(tzinfo=None)]
+    df = df.ffill()
+    df = df.dropna(subset=['qqq', 'btc'], how='all')
+    
+    # 🚨 修复后的二次合成衍生物理指标
     if not df.empty:
-        df['nl'] = (df.get('assets', 0) - df.get('tga', 0).fillna(0) - df.get('rrp', 0).fillna(0)) / 1000000
+        # 提取序列，防止因 API 抓取失败导致标量 0 破坏整个 DataFrame
+        assets_s = df.get('assets', pd.Series(0, index=df.index)).ffill().fillna(0)
+        tga_s = df.get('tga', pd.Series(0, index=df.index)).ffill().fillna(0)
+        rrp_s = df.get('rrp', pd.Series(0, index=df.index)).ffill().fillna(0)
+        
+        # 🚨 物理量纲绝对对齐：
+        # WALCL (百万) -> 转换为万亿 (Trillion) 需除以 1,000,000
+        # WTREGEN (百万) -> 转换为万亿 需除以 1,000,000
+        # RRPONTSYD (十亿) -> 转换为万亿 需除以 1,000
+        df['nl'] = (assets_s / 1000000) - (tga_s / 1000000) - (rrp_s / 1000)
+        
         if 'copper' in df.columns and 'gold' in df.columns:
             df['cg_ratio'] = df['copper'] / df['gold']
         if 'sofr' in df.columns and 'iorb' in df.columns:
             df['sofr_spread'] = (df['sofr'] - df['iorb']) * 100
         if 'us10y' in df.columns and 'us2y' in df.columns:
-            df['yield_curve'] = df['us10y'] - df['us2y'] # <--- 新增 2s10s 压差    
+            df['yield_curve'] = df['us10y'] - df['us2y']
+            
     return df, status_report
-
+    
 def calculate_history(df, fms_val):
     if df.empty: return df
     if 'spread' in df.columns and df['spread'].max() < 50: df['spread'] = df['spread'] * 100
