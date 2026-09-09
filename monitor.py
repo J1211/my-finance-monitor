@@ -137,7 +137,7 @@ def fetch_and_sync_data():
         'btc': safe_get_yf("BTC-USD", "BTC"),
         'qqq': safe_get_yf("QQQ", "QQQ"),
         'chinext': safe_get_yf("159915.SZ", "ChiNext"),
-        'move': safe_get_yf("^MOVE", "MOVE")
+        'move': safe_get_yf("^MOVE", "MOVE"),
         'vix': safe_get_yf("^VIX", "VIX") # <--- 新增 VIX 恐慌指数
     }
 
