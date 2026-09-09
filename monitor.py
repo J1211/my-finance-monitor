@@ -303,12 +303,51 @@ try:
         col_t1.metric("净流动性 (NL)", f"${latest['nl']:.2f}T", f"评分: {s_nl_latest}/25")
         col_t2.metric("10Y TIPS", f"{latest['tips']:.2f}%", f"评分: {score_linear(latest['tips'],0.5,2.5,20,True):.1f}/20")
         col_t3.metric("美元指数 (DXY)", f"{latest['dxy']:.2f}", f"评分: {score_linear(latest['dxy'],98,108,15,True):.1f}/15")
+
+        # --- 核心修复：动态 Y 轴显微镜与幽灵数据切除 ---
+        # 1. 物理过滤：强行切除所有小于 1.0T 的无效幽灵数据
+        valid_df = df[df['nl'] > 1.0].copy()
         
-        fig_nl = go.Figure()
-        fig_nl.add_trace(go.Scatter(x=df.index, y=df['nl'], name="净流动性(T)", line=dict(color='#00ffcc', width=3)))
-        fig_nl.add_trace(go.Scatter(x=df.index, y=df['tips'], name="TIPS (%)", line=dict(color='#FF3131', dash='dot'), yaxis="y2"))
-        fig_nl.update_layout(height=350, template="plotly_dark", yaxis=dict(title="NL (T)"), yaxis2=dict(overlaying="y", side="right", showgrid=False))
-        st.plotly_chart(fig_nl, use_container_width=True)
+        if not valid_df.empty:
+            # 2. 动态锁定上下限 (上下各留 1000 亿美元的呼吸空间)
+            nl_min = valid_df['nl'].min() - 0.1
+            nl_max = valid_df['nl'].max() + 0.1
+            
+            fig_nl = go.Figure()
+            fig_nl.add_trace(go.Scatter(
+                x=valid_df.index, y=valid_df['nl'], 
+                name="净流动性(T)", 
+                line=dict(color='#00ffcc', width=3)
+            ))
+            fig_nl.add_trace(go.Scatter(
+                x=valid_df.index, y=valid_df['tips'], 
+                name="TIPS (%)", 
+                line=dict(color='#FF3131', dash='dot'), 
+                yaxis="y2"
+            ))
+            
+            # 3. 强制重写物理坐标系
+            fig_nl.update_layout(
+                height=350, 
+                template="plotly_dark", 
+                yaxis=dict(
+                    title="NL (T)", 
+                    range=[nl_min, nl_max], # 强行截断 Y 轴
+                    showgrid=True, 
+                    gridcolor='#333'
+                ), 
+                yaxis2=dict(
+                    overlaying="y", 
+                    side="right", 
+                    showgrid=False, 
+                    title="TIPS (%)"
+                ),
+                legend=dict(orientation="h", y=1.1, x=0),
+                margin=dict(l=10, r=10, t=40, b=10)
+            )
+            st.plotly_chart(fig_nl, use_container_width=True)
+        else:
+            st.warning("有效 NL 数据不足，无法渲染流体力学图表。")
 
     with tabs[1]:
         st.subheader("🧠 情绪与购买力监控")
