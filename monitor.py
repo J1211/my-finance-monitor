@@ -87,9 +87,10 @@ def fetch_and_sync_data():
     fred_map = {
         'tips': 'DFII10', 'spread': 'BAMLH0A0HYM2', 'assets': 'WALCL',
         'tga': 'WTREGEN', 'rrp': 'RRPONTSYD', 'sofr': 'SOFR',
-        'iorb': 'IORB', 'us2y': 'DGS2', 
-        'term_premium': 'THREEFYTP10'  # 替换为美联储官方每日高频模型，防断更
+        'iorb': 'IORB', 'us2y': 'DGS2', 'us10y': 'DGS10', # <--- 新增 10Y 收益率
+        'term_premium': 'THREEFYTP10'
     }
+    
     data_dict = {}
     for key, fid in fred_map.items():
         try:
@@ -137,6 +138,7 @@ def fetch_and_sync_data():
         'qqq': safe_get_yf("QQQ", "QQQ"),
         'chinext': safe_get_yf("159915.SZ", "ChiNext"),
         'move': safe_get_yf("^MOVE", "MOVE")
+        'vix': safe_get_yf("^VIX", "VIX") # <--- 新增 VIX 恐慌指数
     }
 
     # --- 核心物理重构：7x24 全天候聚合 (Outer Join) ---
@@ -166,7 +168,8 @@ def fetch_and_sync_data():
             df['cg_ratio'] = df['copper'] / df['gold']
         if 'sofr' in df.columns and 'iorb' in df.columns:
             df['sofr_spread'] = (df['sofr'] - df['iorb']) * 100
-            
+        if 'us10y' in df.columns and 'us2y' in df.columns:
+            df['yield_curve'] = df['us10y'] - df['us2y'] # <--- 新增 2s10s 压差    
     return df, status_report
 
 def calculate_history(df, fms_val):
@@ -322,6 +325,14 @@ try:
             fig_spread.update_layout(height=300, template="plotly_dark")
             st.plotly_chart(fig_spread, use_container_width=True)
 
+        st.write("---")
+        st.subheader("🪙 策略四：法币脱钩与物理背离 (TIPS vs Gold)")
+        st.markdown("正常物理法则：TIPS 升，黄金跌。**如果两者同升，代表主权信用正在发生物理坍塌。**")
+        fig_fiat = go.Figure()
+        fig_fiat.add_trace(go.Scatter(x=df.index[-250:], y=df['gold'].tail(250), name="黄金 (实物原子)", line=dict(color='#FFD700', width=3)))
+        fig_fiat.add_trace(go.Scatter(x=df.index[-250:], y=df['tips'].tail(250), name="10Y TIPS (法币重力, 右轴)", line=dict(color='#FF3131', width=2, dash='dash'), yaxis="y2"))
+        st.plotly_chart(fig_fiat.update_layout(height=350, template="plotly_dark", yaxis2=dict(overlaying="y", side="right", showgrid=False)), use_container_width=True)
+
     with tabs[3]:
         st.subheader("🎯 Alpha 审计 (Relative Strength)")
         
@@ -455,19 +466,23 @@ try:
                 st.warning(f"系统无法审计该标的，物理断裂原因: {e}")
         
     with tabs[4]:
-        st.subheader("🏛️ 债市重力审计")
-        b1, b2, b3 = st.columns(3)
-        b1.metric("MOVE 指数", f"{latest.get('move', 0):.1f}", "🟡 警戒" if latest.get('move', 0) > 100 else "🟢 平稳")
-        b2.metric("2Y 美债收益率", f"{latest.get('us2y', 0):.2f}%")
+        st.subheader("🏛️ 债市重力与熵增审计")
+        b1, b2, b3, b4 = st.columns(4)
+        b1.metric("MOVE (债市恐慌)", f"{latest.get('move', 0):.1f}", "🟡 警戒" if latest.get('move', 0) > 100 else "🟢 平稳")
+        b2.metric("VIX (股市恐慌)", f"{latest.get('vix', 0):.1f}", "🚨 核爆" if latest.get('vix', 0) > 30 else "🟢 平稳")
         b3.metric("10Y 期限溢价", f"{latest.get('term_premium', 0):.2f}")
+        b4.metric("2s10s 收益率曲线", f"{latest.get('yield_curve', 0):.2f}%", "陡峭化绞肉机" if latest.get('yield_curve', 0) > 0 else "倒挂中")
+        
         fig_bond = go.Figure()
-        if 'us2y' in df.columns:
-            fig_bond.add_trace(go.Scatter(x=df.index[-120:], y=df['us2y'].tail(120), name="2Y 收益率", line=dict(color='#FF3131', width=3)))
-            fig_bond.add_trace(go.Scatter(x=df.index[-120:], y=df['us2y'].rolling(50).mean().tail(120), name="50MA", line=dict(color='white', dash='dot')))
-        if 'move' in df.columns:
-            fig_bond.add_trace(go.Scatter(x=df.index[-120:], y=df['move'].tail(120), name="MOVE (右轴)", line=dict(color='#00ffcc', width=2, dash='dash'), yaxis="y2"))
-        st.plotly_chart(fig_bond.update_layout(height=450, template="plotly_dark", yaxis2=dict(overlaying="y", side="right", showgrid=False)), use_container_width=True)
-
+        if 'yield_curve' in df.columns:
+            fig_bond.add_trace(go.Scatter(x=df.index[-180:], y=df['yield_curve'].tail(180), name="2s10s 压差 (左轴)", line=dict(color='#FF3131', width=3)))
+            fig_bond.add_hline(y=0, line_dash="dash", line_color="white", annotation_text="解除倒挂 (熊陡警戒线)")
+        if 'move' in df.columns and 'vix' in df.columns:
+            fig_bond.add_trace(go.Scatter(x=df.index[-180:], y=df['move'].tail(180), name="MOVE (右轴)", line=dict(color='#00ffcc', width=2, dash='dot'), yaxis="y2"))
+            fig_bond.add_trace(go.Scatter(x=df.index[-180:], y=df['vix'].tail(180), name="VIX (右轴)", line=dict(color='orange', width=2), yaxis="y2"))
+            
+        st.plotly_chart(fig_bond.update_layout(height=400, template="plotly_dark", yaxis2=dict(overlaying="y", side="right", showgrid=False), title="策略二/三：曲线陡峭化与双核波动率共振"), use_container_width=True)
+    
     with tabs[5]:
         st.subheader("📊 系统验证与宏观黑匣子")
         
