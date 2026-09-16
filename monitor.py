@@ -133,7 +133,7 @@ def fetch_and_sync_data():
         'gold': safe_get_yf("GC=F", "Gold"),
         'hkd': safe_get_yf("HKD=X", "HKD"),
         'hsi': safe_get_yf("^HSI", "HSI"),
-        'as300': safe_get_yf("000300.SS", "AS300"),
+        'as300': safe_get_yf("510300.SS", "AS300"),
         'btc': safe_get_yf("BTC-USD", "BTC"),
         'qqq': safe_get_yf("QQQ", "QQQ"),
         'chinext': safe_get_yf("159915.SZ", "ChiNext"),
@@ -827,7 +827,7 @@ try:
         baseline = st.selectbox("选择对标的宏观重力基准", baseline_options)
         
         # 🚨 核心修复 1：YF 绝对物理坐标锚定
-        baseline_ticker = "000300.SS" if "沪深300" in baseline else "QQQ"
+        baseline_ticker = "510300.SS" if "沪深300" in baseline else "QQQ"
         
         if st.button("📡 启动全行业物理扫描"):
             with st.spinner("正在进行跨行业流体力学测算 (硬核模式)..."):
