@@ -422,7 +422,7 @@ try:
                     sniper_results.append({"资产代码": t, "系统指令": "❌ 物理数据抓取为空", "RS前置斜率": "-", "RS当前斜率": "-", "当前价/200MA": "-", "量能倍率(VR)": "-"})
                     continue
                     
-                t_close = t_data['Close'].iloc[:, 0] if isinstance(t_data.columns, pd.MultiIndex) else t_data['Close']
+                t_close = t_data['Adj Close'].iloc[:, 0] if isinstance(t_data.columns, pd.MultiIndex) else t_data['Adj Close']
                 t_vol = t_data['Volume'].iloc[:, 0] if isinstance(t_data.columns, pd.MultiIndex) else t_data['Volume']
                 
                 # 🚨 强制时区粉碎，确保跨国资产（美股/A股）时间轴能完美对齐
