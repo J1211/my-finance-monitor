@@ -997,9 +997,25 @@ try:
                             ma50 = s_close.rolling(50).mean().iloc[-1]
                             price_to_ma50 = (s_close.iloc[-1] / ma50) - 1
                             
-                            if rs_20d_slope > 0.03: state = "🔥 强势吸筹 (机构净买入)"
-                            elif rs_20d_slope < -0.03: state = "🩸 持续失血 (机构净抛售)"
-                            else: state = "⚖️ 随波逐流 (纯 Beta)"
+                            # 🚨 核心修复：二维流体力学判定矩阵 (融合中期洋流与短期爆发)
+                            if rs_20d_slope > 0.03: 
+                                if rs_5d_slope > 0.05:
+                                    state = "🔥 强势吸筹 & 极速逼空"
+                                else:
+                                    state = "🌊 稳健吸筹 (机构净买入)"
+                            elif rs_20d_slope < -0.03: 
+                                if rs_5d_slope < -0.05:
+                                    state = "🩸 持续失血 & 恐慌抛售"
+                                else:
+                                    state = "📉 阴跌失血 (机构净抛售)"
+                            else: 
+                                # 20日斜率平庸，但短期发生动能突变
+                                if rs_5d_slope > 0.06:
+                                    state = "🚀 暴力点火 (短期极速反转)"
+                                elif rs_5d_slope < -0.06:
+                                    state = "⚠️ 短期砸盘 (动能向下突变)"
+                                else:
+                                    state = "⚖️ 随波逐流 (纯 Beta)"
                             
                             sector_results.append({
                                 "行业板块": sector_name,
