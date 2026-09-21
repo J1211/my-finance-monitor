@@ -526,14 +526,25 @@ try:
                     rs_turned_positive = (prev_slope < 0) and (current_slope > 0)
                     
                     # 综合战术裁决
-                    if is_breakout and is_forceful and rs_turned_positive:
-                        action = "🔥 猎杀确认 (全条件达成)"
-                    elif rs_turned_positive:
-                        action = "🟡 RS 苏醒 (等待 200MA 突破)"
-                    elif is_breakout and not is_forceful:
-                        action = "⚠️ 无量诱多 (VR不足)"
+                    # --- 🚨 核心修复：二维流体力学决策树 ---
+                    # 第一维度：是否摆脱重力黑洞 (在 200MA 上方)
+                    if is_breakout:
+                        # 在 200MA 上方的状态细分
+                        if is_forceful and current_slope > 0:
+                            action = "🔥 强势主升 (全条件达成)"
+                        elif not is_forceful and current_slope > 0:
+                            action = "⚠️ 无量空涨 (等待VR确认)"
+                        else:
+                            action = "🩸 动能背离 (RS跑输大盘)"
                     else:
-                        action = "❄️ 重力压制中 (蛰伏)"
+                        # 第二维度：在 200MA 下方 (重力黑洞中) 的状态细分
+                        if rs_turned_positive and is_forceful:
+                            action = "🟡 底部抢筹 (左侧放量异动)"
+                        elif rs_turned_positive and not is_forceful:
+                            action = "🌱 RS 苏醒 (等待突破200MA)"
+                        else:
+                            action = "❄️ 重力压制中 (蛰伏)"
+
                         
                     sniper_results.append({
                         "资产代码": t,
