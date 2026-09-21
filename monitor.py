@@ -5,6 +5,7 @@ import numpy as np
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
 from fredapi import Fred
+import akshare as ak  # <--- 新增：引入 AkShare 库
 
 # --- 1. 界面配置与核心人格 ---
 st.set_page_config(page_title="GSMI Tactical | 首席风险官决策系统", layout="wide")
@@ -21,8 +22,6 @@ st.markdown("""
 st.title("🏹 GSMI 全球聪明钱监控与验证系统")
 
 # --- 动态 GSMI 战术状态机 ---
-# 必须在算出 df 和 latest 变量之后调用
-# 🚨 在此处打下空间锚点，预留给后面的状态机
 status_placeholder = st.empty()
 
 # --- 2. 侧边栏配置 ---
@@ -59,6 +58,32 @@ fred = Fred(api_key=fred_key)
 
 # --- 3. 核心审计函数 ---
 
+# 🚨 新增：AkShare A股 ETF 前复权数据抓取引擎
+def get_akshare_etf_data(ticker, start_date, end_date):
+    """
+    使用 AkShare 获取 A 股 ETF 的前复权数据，并转换为与 yfinance 兼容的格式。
+    """
+    try:
+        symbol = ticker.split('.')[0] 
+        start_str = start_date.strftime('%Y%m%d')
+        end_str = end_date.strftime('%Y%m%d')
+        
+        df = ak.fund_etf_hist_em(symbol=symbol, period="daily", start_date=start_str, end_date=end_str, adjust="qfq")
+        
+        if df is None or df.empty:
+            return pd.DataFrame()
+            
+        df = df.rename(columns={'日期': 'Date', '收盘': 'Close', '成交量': 'Volume', '最高': 'High', '最低': 'Low', '开盘': 'Open'})
+        df['Date'] = pd.to_datetime(df['Date'])
+        df.set_index('Date', inplace=True)
+        
+        for col in ['Open', 'High', 'Low', 'Close', 'Volume']:
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+            
+        return df
+    except Exception as e:
+        return pd.DataFrame()
+
 def score_linear(val, min_val, max_val, max_score, reverse=False):
     if not reverse:
         score = (val - min_val) / (max_val - min_val) * max_score
@@ -83,18 +108,17 @@ def fetch_and_sync_data():
     start = end - timedelta(days=500)
     status_report = {}
     
-    # 1. 抓取 FRED (带 30 天容错与底层降级逻辑)
+    # 1. 抓取 FRED
     fred_map = {
         'tips': 'DFII10', 'spread': 'BAMLH0A0HYM2', 'assets': 'WALCL',
         'tga': 'WTREGEN', 'rrp': 'RRPONTSYD', 'sofr': 'SOFR',
-        'iorb': 'IORB', 'us2y': 'DGS2', 'us10y': 'DGS10', # <--- 新增 10Y 收益率
+        'iorb': 'IORB', 'us2y': 'DGS2', 'us10y': 'DGS10',
         'term_premium': 'THREEFYTP10'
     }
     
     data_dict = {}
     for key, fid in fred_map.items():
         try:
-            # 物理溯源：提取时向左多捞 30 天，防止某些宏观数据存在发布黑洞
             s = fred.get_series(fid, start - timedelta(days=30), end)
             if not s.empty:
                 data_dict[key] = s
@@ -102,7 +126,6 @@ def fetch_and_sync_data():
             else:
                 status_report[f"FRED:{key}"] = "❌ (Empty)"
         except Exception:
-            # 如果 THREEFYTP10 偶尔抽风，备用回退到原 ACMTP10
             if key == 'term_premium':
                 try:
                     s_fallback = fred.get_series('ACMTP10', start - timedelta(days=30), end)
@@ -113,7 +136,7 @@ def fetch_and_sync_data():
                 except: pass
             status_report[f"FRED:{key}"] = "❌"
 
-    # 2. 抓取 Yahoo Finance (自动降维防护)
+    # 2. 抓取 Yahoo Finance
     def safe_get_yf(ticker, name):
         try:
             df = yf.download(ticker, start=start - timedelta(days=10), end=end, progress=False)
@@ -138,51 +161,24 @@ def fetch_and_sync_data():
         'qqq': safe_get_yf("QQQ", "QQQ"),
         'chinext': safe_get_yf("159915.SZ", "ChiNext"),
         'move': safe_get_yf("^MOVE", "MOVE"),
-        'vix': safe_get_yf("^VIX", "VIX") # <--- 新增 VIX 恐慌指数
+        'vix': safe_get_yf("^VIX", "VIX")
     }
 
     # --- 核心物理重构：7x24 全天候聚合 (Outer Join) ---
     all_series = {**data_dict, **yf_dict}
-    # pandas DataFrame 接收字典时，会自动求取所有索引的并集，释放周末时间维度
     df = pd.DataFrame(all_series)
     
-   # 清洗时间戳时区，强制对齐绝对时间
-    df.index = pd.to_datetime(df.index).tz_localize(None)
-    
-    # 🚨 核心修复：强制时间熵减，恢复时间轴单调递增排列，否则无法切片
-    df = df.sort_index() 
-    
-    # 按照严格请求时间范围切割，切除向左多捞的数据
-    df = df.loc[start.replace(tzinfo=None):end.replace(tzinfo=None)]
-    
-    # 物理静默：周末或节假日没有交易的数据，继承前一个交易日的重力状态
-    df = df.ffill()
-    
-    # 只清除在系统最开始连 QQQ 和 BTC 都没有的无效死数据
-    df = df.dropna(subset=['qqq', 'btc'], how='all')
-    
-    # --- 核心物理重构：7x24 全天候聚合 (Outer Join) ---
-    all_series = {**data_dict, **yf_dict}
-    df = pd.DataFrame(all_series)
-    
-    # 清洗时间戳时区，强制对齐绝对时间
     df.index = pd.to_datetime(df.index).tz_localize(None)
     df = df.sort_index() 
     df = df.loc[start.replace(tzinfo=None):end.replace(tzinfo=None)]
     df = df.ffill()
     df = df.dropna(subset=['qqq', 'btc'], how='all')
     
-    # 🚨 修复后的二次合成衍生物理指标
     if not df.empty:
-        # 提取序列，防止因 API 抓取失败导致标量 0 破坏整个 DataFrame
         assets_s = df.get('assets', pd.Series(0, index=df.index)).ffill().fillna(0)
         tga_s = df.get('tga', pd.Series(0, index=df.index)).ffill().fillna(0)
         rrp_s = df.get('rrp', pd.Series(0, index=df.index)).ffill().fillna(0)
         
-        # 🚨 物理量纲绝对对齐：
-        # WALCL (百万) -> 转换为万亿 (Trillion) 需除以 1,000,000
-        # WTREGEN (百万) -> 转换为万亿 需除以 1,000,000
-        # RRPONTSYD (十亿) -> 转换为万亿 需除以 1,000
         df['nl'] = (assets_s / 1000000) - (tga_s / 1000000) - (rrp_s / 1000)
         
         if 'copper' in df.columns and 'gold' in df.columns:
@@ -236,7 +232,6 @@ try:
         latest_date = df.index[-1].strftime('%Y.%m.%d')
         current_gsmi = latest['gsmi_score']
         
-        # 防止数据量不够导致 nan 崩溃
         if pd.isna(current_gsmi):
             status_placeholder.warning("⚠️ 数据回溯期不足 20 天，无法计算 GSMI 重力。")
         else:
@@ -247,7 +242,6 @@ try:
             else:
                 zone, action, icon = "水源扩张区", "流动性充裕 | 对‘非你不可’标的执行右侧主攻", "🟢"
 
-            # 逆向注入到顶部的 status_placeholder 中
             status_placeholder.markdown(f"""
             <div style='padding: 10px; border-radius: 5px; border: 1px solid #444; background-color: #1a1c24; margin-bottom: 20px;'>
                 <h4 style='margin:0; color: #eee;'>
@@ -260,10 +254,8 @@ try:
             """, unsafe_allow_html=True)
 
     except Exception as e:
-        # 如果再次失败，强制吐出真实错误日志，绝不吞噬异常
         status_placeholder.error(f"🚨 状态机加载发生物理断裂: {e}")
     
-    # 变量初始化
     nl_ma_last = df['nl'].rolling(20).mean().iloc[-1]
     s_nl_latest = (15 if latest['nl'] > nl_ma_last else 0) + (10 if latest['nl'] > df['nl'].iloc[-6] else 0)
     s_cg_latest = (10 if latest['cg_ratio'] > df['cg_ratio'].rolling(200).mean().iloc[-1] else 0) + (5 if latest['cg_ratio'] > df['cg_ratio'].iloc[-10:-5].mean() else 0)
@@ -304,12 +296,9 @@ try:
         col_t2.metric("10Y TIPS", f"{latest['tips']:.2f}%", f"评分: {score_linear(latest['tips'],0.5,2.5,20,True):.1f}/20")
         col_t3.metric("美元指数 (DXY)", f"{latest['dxy']:.2f}", f"评分: {score_linear(latest['dxy'],98,108,15,True):.1f}/15")
 
-        # --- 核心修复：动态 Y 轴显微镜与幽灵数据切除 ---
-        # 1. 物理过滤：强行切除所有小于 1.0T 的无效幽灵数据
         valid_df = df[df['nl'] > 1.0].copy()
         
         if not valid_df.empty:
-            # 2. 动态锁定上下限 (上下各留 1000 亿美元的呼吸空间)
             nl_min = valid_df['nl'].min() - 0.1
             nl_max = valid_df['nl'].max() + 0.1
             
@@ -326,13 +315,12 @@ try:
                 yaxis="y2"
             ))
             
-            # 3. 强制重写物理坐标系
             fig_nl.update_layout(
                 height=350, 
                 template="plotly_dark", 
                 yaxis=dict(
                     title="NL (T)", 
-                    range=[nl_min, nl_max], # 强行截断 Y 轴
+                    range=[nl_min, nl_max], 
                     showgrid=True, 
                     gridcolor='#333'
                 ), 
@@ -400,52 +388,47 @@ try:
         # --- 模块 1：战略资产猎杀雷达 (动态槽位) ---
         st.write("### 🦅 猎杀雷达：RS 拐点与 200MA 突破监测")
         
-        # 预设的战略物理资产池
         default_snipers = ['515880.SS', '159558.SZ', '159326.SZ', '512400.SS', '512670.SS']
         sniper_cols = st.columns(5)
         sniper_tickers = []
         
-        # 生成 5 个动态输入框
         for i in range(5):
             val = sniper_cols[i].text_input(f"猎杀槽位 {i+1}", default_snipers[i])
             if val:
                 sniper_tickers.append(val.strip())
                 
-        benchmark_ticker = 'as300' # 默认 Beta 基准
+        benchmark_ticker = 'as300' 
         
         sniper_results = []
         for t in sniper_tickers:
             try:
-                # 调取充足的历史数据以计算 200MA
-                t_data = yf.download(t, start=df.index[0] - timedelta(days=300), end=df.index[-1], progress=False)
+                # 🚨 核心修复：智能路由，A股ETF走AkShare前复权，其他走YF
+                if ".SS" in t or ".SZ" in t:
+                    t_data = get_akshare_etf_data(t, df.index[0] - timedelta(days=300), datetime.now())
+                else:
+                    t_data = yf.download(t, start=df.index[0] - timedelta(days=300), end=datetime.now(), progress=False)
+                
                 if t_data.empty: 
                     sniper_results.append({"资产代码": t, "系统指令": "❌ 物理数据抓取为空", "RS前置斜率": "-", "RS当前斜率": "-", "当前价/200MA": "-", "量能倍率(VR)": "-"})
                     continue
                     
-                # 🚨 终极复权装甲：优先抓取 Adj Close，若 YF 引擎未提供则自动降级为 Close
                 price_col = 'Adj Close' if 'Adj Close' in t_data.columns else 'Close'
                 t_close = t_data[price_col].iloc[:, 0] if isinstance(t_data.columns, pd.MultiIndex) else t_data[price_col]
                 t_vol = t_data['Volume'].iloc[:, 0] if isinstance(t_data.columns, pd.MultiIndex) else t_data['Volume']
 
-                
-                # 🚨 强制时区粉碎，确保跨国资产（美股/A股）时间轴能完美对齐
                 t_close.index = pd.to_datetime(t_close.index).tz_localize(None)
                 t_vol.index = pd.to_datetime(t_vol.index).tz_localize(None)
                 
-                # 计算 200MA (防范上市不足 200 天的新股)
                 if len(t_close) < 200: 
                     sniper_results.append({"资产代码": t, "系统指令": "⚠️ 上市不足200天，无引力参考", "RS前置斜率": "-", "RS当前斜率": "-", "当前价/200MA": "-", "量能倍率(VR)": "-"})
                     continue
                 ma200 = t_close.rolling(200).mean()
                 
-                # 1. 200MA 突破判定：今日站上且 3 日前在下方
                 is_breakout = (t_close.iloc[-1] > ma200.iloc[-1]) and (t_close.iloc[-4] < ma200.iloc[-4])
                 
-                # 2. 量能燃料判定：VR > 1.5
                 vr = t_vol.iloc[-1] / t_vol.iloc[-6:-1].mean()
                 is_forceful = vr > 1.5
                 
-                # 3. RS 斜率拐点判定
                 rs_df = pd.DataFrame({'target': t_close, 'base': df[benchmark_ticker]}).ffill().dropna()
                 if len(rs_df) < 25: 
                     sniper_results.append({"资产代码": t, "系统指令": "⚠️ 动能对比数据不足", "RS前置斜率": "-", "RS当前斜率": "-", "当前价/200MA": "-", "量能倍率(VR)": "-"})
@@ -455,10 +438,8 @@ try:
                 current_slope = (rs_curve.iloc[-1] / rs_curve.iloc[-10]) - 1
                 prev_slope = (rs_curve.iloc[-10] / rs_curve.iloc[-20]) - 1
                 
-                # 由负转正
                 rs_turned_positive = (prev_slope < 0) and (current_slope > 0)
                 
-                # 综合战术裁决
                 if is_breakout and is_forceful and rs_turned_positive:
                     action = "🔥 猎杀确认 (全条件达成)"
                 elif rs_turned_positive:
@@ -477,7 +458,6 @@ try:
                     "系统指令": action
                 })
             except Exception as e:
-                # 绝对不静默：如果代码崩溃，把错误直接打印在面板上
                 sniper_results.append({"资产代码": t, "系统指令": f"❌ 运算断裂", "RS前置斜率": "-", "RS当前斜率": "-", "当前价/200MA": "-", "量能倍率(VR)": "-"})
 
         if sniper_results:
@@ -492,13 +472,17 @@ try:
         audit_ticker = st.text_input("输入要详细审计的标的代码", "159326.SZ", key="single_audit")
         if audit_ticker:
             try:
-                # 往左深捞 300 天，确保 200MA 有足够的数据计算
-                a_data = yf.download(audit_ticker, start=df.index[0]-timedelta(days=300), end=df.index[-1], progress=False)
+                # 🚨 核心修复：智能路由
+                if ".SS" in audit_ticker or ".SZ" in audit_ticker:
+                    a_data = get_akshare_etf_data(audit_ticker, df.index[0]-timedelta(days=300), datetime.now())
+                else:
+                    a_data = yf.download(audit_ticker, start=df.index[0]-timedelta(days=300), end=datetime.now(), progress=False)
+                
                 if not a_data.empty:
-                    a_close = a_data['Close'].iloc[:, 0] if isinstance(a_data.columns, pd.MultiIndex) else a_data['Close']
+                    price_col = 'Adj Close' if 'Adj Close' in a_data.columns else 'Close'
+                    a_close = a_data[price_col].iloc[:, 0] if isinstance(a_data.columns, pd.MultiIndex) else a_data[price_col]
                     a_vol = a_data['Volume'].iloc[:, 0] if isinstance(a_data.columns, pd.MultiIndex) else a_data['Volume']
                     
-                    # 🚨 时区清洗，防止单项标的与 A股大盘合并时发生断裂
                     a_close.index = pd.to_datetime(a_close.index).tz_localize(None)
                     a_vol.index = pd.to_datetime(a_vol.index).tz_localize(None)
                     
@@ -509,20 +493,14 @@ try:
                     curr_rs = rs_ratio.iloc[-1]
                     slope_single = (curr_rs / rs_ratio.iloc[-6] - 1) * 100
                     
-                    # 输出核心指标
                     v1, v2, v3 = st.columns(3)
                     v1.metric("量能倍率 (VR)", f"{vr:.2f}", "🔥 爆发" if vr > 1.5 else "⚖️ 平稳")
                     v2.metric("相对强度 (RS)", f"{curr_rs:.6f}", f"5日斜率: {slope_single:+.2f}%")
                     v3.write(f"**审计判定：{'🔥 强 Alpha' if curr_rs > rs_ratio.rolling(20).mean().iloc[-1] else '❄️ 弱 Beta'}**")
                     
-                    # 恢复 RS 物理曲线图表
                     fig_rs = go.Figure()
-                    
-                    # 界面视图保持展现最近 250 个交易日，但核心引力线已替换为 200MA
                     fig_rs.add_trace(go.Scatter(x=rs_ratio.index[-250:], y=rs_ratio.values[-250:], name="RS 曲线", line=dict(color='#00ffcc', width=3)))
                     fig_rs.add_trace(go.Scatter(x=rs_ratio.index[-250:], y=rs_ratio.rolling(20).mean().tail(250), name="20MA (短期生命线)", line=dict(color='white', dash='dot')))
-                    
-                    # 🚨 核心修改处：将 rolling(250) 替换为 rolling(200)，统一系统重力刻度
                     fig_rs.add_trace(go.Scatter(x=rs_ratio.index[-250:], y=rs_ratio.rolling(200).mean().tail(250), name="200MA (引力场边界)", line=dict(color='orange', width=2, dash='dash')))
                     
                     st.plotly_chart(fig_rs.update_layout(height=400, template="plotly_dark", legend=dict(orientation="h", y=1.1)), use_container_width=True)
@@ -550,7 +528,6 @@ try:
     with tabs[5]:
         st.subheader("📊 系统验证与宏观黑匣子")
         
-        # --- 1. 原有 GSMI 验证模块 ---
         df_resample = df.copy()
         df_resample.index = pd.to_datetime(df_resample.index)
         df_w = df_resample.resample('W-FRI').last().dropna(subset=['gsmi_score', 'qqq'])
@@ -562,14 +539,12 @@ try:
         
         st.write("---")
         
-        # --- 2. 新增：系统血压 (SOFR-IORB) 心电图与黑匣子 ---
         st.subheader("🩸 底层管网血压心电图 (SOFR - IORB)")
         st.markdown("监测美元回购市场的物理断裂史。**> 0 bps 代表流动性休克（大动脉破裂），触发强制清仓。**")
         
         if 'sofr_spread' in df.columns:
             fig_bp = go.Figure()
             
-            # 绘制基础血压曲线
             fig_bp.add_trace(go.Scatter(
                 x=df.index, y=df['sofr_spread'], 
                 name="SOFR-IORB (bps)", 
@@ -577,10 +552,8 @@ try:
                 fill='tozeroy', fillcolor='rgba(0, 255, 204, 0.1)'
             ))
             
-            # 划定物理死亡线 (0 bps)
             fig_bp.add_hline(y=0, line_dash="dash", line_color="#FF3131", annotation_text="休克红线 (0 bps)", annotation_position="top left")
             
-            # 提取并标记所有 > 0 的休克点 (红色 X 标记)
             shock_points = df[df['sofr_spread'] > 0]
             if not shock_points.empty:
                 fig_bp.add_trace(go.Scatter(
@@ -592,7 +565,6 @@ try:
             fig_bp.update_layout(height=350, template="plotly_dark", yaxis_title="息差 (bps)", margin=dict(l=10, r=10, t=30, b=10))
             st.plotly_chart(fig_bp, use_container_width=True)
             
-            # --- 3. 异常事件黑匣子日志 ---
             st.write("### 🚨 近期休克事件日志 (过去 90 天)")
             recent_shocks = shock_points[shock_points.index > (datetime.now() - timedelta(days=90))]
             
@@ -601,7 +573,6 @@ try:
                 log_df.index = log_df.index.strftime('%Y-%m-%d')
                 log_df.columns = ['血压读数 (bps)']
                 log_df['物理状态'] = "💥 管道破裂 (触发清仓)"
-                # 降序排列，最新的排在最上面
                 st.table(log_df.sort_index(ascending=False))
             else:
                 st.success("✅ 过去 90 天内，底层回购管道未发生物理断裂。")
@@ -610,7 +581,6 @@ try:
             
         st.write("---")
         
-        # --- 4. 原有最后执行确认模块 ---
         st.subheader("🌉 最后执行确认")
         hk1, hk2 = st.columns(2)
         with hk1:
@@ -627,7 +597,6 @@ try:
         st.subheader("🛡️ CRO 仓位几何学与动态重力风控")
         st.markdown("基于 **ATR (真实波动)** 与 **生命周期匹配** 的头寸计算器。")
         
-        # 风险参数面板
         r1, r2, r3 = st.columns(3)
         total_capital = r1.number_input("账户总本金 (¥/$)", value=1000000, step=100000)
         risk_tolerance = r2.number_input("单笔最大物理亏损容忍度 (%)", value=1.0, step=0.1, max_value=5.0)
@@ -639,7 +608,6 @@ try:
         with c1:
             target_ticker = st.text_input("输入建仓资产代码 (如 159326.SZ)", value="159326.SZ")
         with c2:
-            # 引入动态生命周期校验
             asset_stage = st.selectbox(
                 "强制确认：该资产当前所处物理生命周期", 
                 [
@@ -648,15 +616,14 @@ try:
                     "C. 奇点兑现期 (物理瓶颈被击穿, 真实FCF爆发)", 
                     "D. 平庸公用事业期 (产能过剩, 沦为纯 Beta)"
                 ],
-                index=2 # 默认选项
+                index=2 
             )
         
         if target_ticker:
-            # 动态物理冲突审计
             try:
                 current_tips = df['tips'].iloc[-1]
             except:
-                current_tips = 2.0 # 容错默认值
+                current_tips = 2.0 
                 
             if "A. 叙事孵化" in asset_stage and current_tips > 2.1:
                 st.warning(f"🚨 CRO 宏观冲突预警：当前处于高重力环境 (TIPS {current_tips:.2f}% > 2.1%)。高息将极大压制无自由现金流的叙事类资产估值。此笔交易属于高重力逆势博弈，建议进一步压缩单笔亏损容忍度。")
@@ -665,24 +632,26 @@ try:
             elif "C. 奇点兑现" in asset_stage:
                 st.success("✅ CRO 物理匹配：具备真实 FCF 的资产是高重力时代的优质收税人，准许按常规参数测算。")
 
-            
             try:
-                # 强制脱离主 df 依赖，独立捞取 150 天，确保绝对有 14 个有效交易日
                 fetch_start = datetime.now() - timedelta(days=150)
-                p_data = yf.download(target_ticker, start=fetch_start, end=datetime.now(), progress=False)
+                
+                # 🚨 核心修复：智能路由
+                if ".SS" in target_ticker or ".SZ" in target_ticker:
+                    p_data = get_akshare_etf_data(target_ticker, fetch_start, datetime.now())
+                else:
+                    p_data = yf.download(target_ticker, start=fetch_start, end=datetime.now(), progress=False)
                 
                 if not p_data.empty:
-                    # 🚨 核心修复：暴力清洗 Yahoo Finance 经常缺失的 High/Low 数据空洞
                     p_data = p_data.ffill().dropna()
                     
                     if len(p_data) < 15:
                         st.error(f"物理有效数据点仅剩 {len(p_data)} 天，不足以计算 14 日 ATR。该资产可能刚上市，或处于长期停牌状态。")
                     else:
-                        close_col = p_data['Close'].iloc[:, 0] if isinstance(p_data.columns, pd.MultiIndex) else p_data['Close']
+                        price_col = 'Adj Close' if 'Adj Close' in p_data.columns else 'Close'
+                        close_col = p_data[price_col].iloc[:, 0] if isinstance(p_data.columns, pd.MultiIndex) else p_data[price_col]
                         high_col = p_data['High'].iloc[:, 0] if isinstance(p_data.columns, pd.MultiIndex) else p_data['High']
                         low_col = p_data['Low'].iloc[:, 0] if isinstance(p_data.columns, pd.MultiIndex) else p_data['Low']
                         
-                        # 强制时区对齐，防止索引错乱
                         close_col.index = pd.to_datetime(close_col.index).tz_localize(None)
                         high_col.index = pd.to_datetime(high_col.index).tz_localize(None)
                         low_col.index = pd.to_datetime(low_col.index).tz_localize(None)
@@ -738,9 +707,7 @@ try:
                     st.error("数据抓取完全为空，请检查代码是否正确（如后缀 .SS/.SZ）。")
             except Exception as e:
                 st.error(f"计算发生物理断裂: {e}")
-# ==========================================
-        # 追加模块：资产流体力学 (相关性维度坍塌检测)
-        # ==========================================
+
         st.write("---")
         st.subheader("🕸️ 资产流体力学：组合维度坍塌检测")
         st.markdown("计算持仓池底层物理相关性。如果资产间相关系数 **> 0.8**，意味着你正在同一个雷区重复下注。")
@@ -751,25 +718,27 @@ try:
             corr_tickers = [x.strip() for x in corr_input.split(",") if x.strip()]
             if len(corr_tickers) > 1:
                 try:
-                    # 抓取过去 60 天的收盘价来计算短期真实相关性
-                    c_data = yf.download(corr_tickers, start=datetime.now() - timedelta(days=90), end=datetime.now(), progress=False)
-                    
-                    if not c_data.empty:
-                        # 修复 Yahoo Finance 单/多标的返回结构的物理差异
-                        if isinstance(c_data.columns, pd.MultiIndex):
-                            c_close = c_data['Close']
+                    # 🚨 核心修复：智能路由，支持混合输入
+                    c_close_dict = {}
+                    for ct in corr_tickers:
+                        if ".SS" in ct or ".SZ" in ct:
+                            temp_df = get_akshare_etf_data(ct, datetime.now() - timedelta(days=90), datetime.now())
+                            if not temp_df.empty:
+                                c_close_dict[ct] = temp_df['Close']
                         else:
-                            c_close = pd.DataFrame({corr_tickers[0]: c_data['Close']})
-                            
-                        # 物理清洗：时区对齐与空值过滤
+                            temp_df = yf.download(ct, start=datetime.now() - timedelta(days=90), end=datetime.now(), progress=False)
+                            if not temp_df.empty:
+                                price_col = 'Adj Close' if 'Adj Close' in temp_df.columns else 'Close'
+                                c_close_dict[ct] = temp_df[price_col].iloc[:, 0] if isinstance(temp_df.columns, pd.MultiIndex) else temp_df[price_col]
+                    
+                    if c_close_dict:
+                        c_close = pd.DataFrame(c_close_dict)
                         c_close.index = pd.to_datetime(c_close.index).tz_localize(None)
                         c_close = c_close.ffill().dropna()
                         
-                        # 计算每日收益率并得出相关性矩阵 (Pearson)
                         returns = c_close.pct_change().dropna()
                         corr_matrix = returns.corr()
                         
-                        # 检测是否存在“维度坍塌” (相关性 > 0.8)
                         collapse_pairs = []
                         for i in range(len(corr_matrix.columns)):
                             for j in range(i+1, len(corr_matrix.columns)):
@@ -783,7 +752,6 @@ try:
                         else:
                             st.success("✅ 组合正交化良好：未检测到极度相关的资产对，防线具备物理层次。")
                         
-                        # 渲染热力图
                         fig_corr = go.Figure(data=go.Heatmap(
                             z=corr_matrix.values,
                             x=corr_matrix.columns,
@@ -800,6 +768,8 @@ try:
                             title="近 60 日底层物理相关系数矩阵 (-1 至 1)"
                         )
                         st.plotly_chart(fig_corr, use_container_width=True)
+                    else:
+                        st.warning("无法获取相关性数据。")
                 except Exception as e:
                     st.warning(f"相关性计算发生断裂: {e}")
             else:
@@ -809,7 +779,6 @@ try:
         st.subheader("🔭 行业板块流体力学 X 光扫描")
         st.markdown("抛弃研报叙事。直接监测全市场资金在物理管道中的**真实流向（吸筹与失血）**。")
         
-        # CRO 物理光谱定义：四大象限全光谱宽基雷达
         sector_map = {
             "能源/煤炭 (旧世界基石)": "515220.SS",
             "有色金属 (原子源头)": "512400.SS",
@@ -825,27 +794,29 @@ try:
             "纳斯达克科技 (全球 Beta)": "QQQ"
         }
         
-        # 修正宏观基准坐标选择
         baseline_options = ["沪深300 (A股大盘)", "纳斯达克 (美股大盘)"]
         baseline = st.selectbox("选择对标的宏观重力基准", baseline_options)
         
-        # 🚨 核心修复 1：YF 绝对物理坐标锚定
         baseline_ticker = "510300.SS" if "沪深300" in baseline else "QQQ"
         
         if st.button("📡 启动全行业物理扫描"):
             with st.spinner("正在进行跨行业流体力学测算 (硬核模式)..."):
                 sector_results = []
                 try:
-                    # 🚨 核心修复 2：向左深捞 180 天，彻底填平跨国节假日黑洞
                     fetch_start = datetime.now() - timedelta(days=180) 
                     
-                    # 抓取大盘基准
-                    base_raw = yf.download(baseline_ticker, start=fetch_start, end=datetime.now(), progress=False)
+                    # 🚨 核心修复：基准也走智能路由
+                    if ".SS" in baseline_ticker or ".SZ" in baseline_ticker:
+                        base_raw = get_akshare_etf_data(baseline_ticker, fetch_start, datetime.now())
+                    else:
+                        base_raw = yf.download(baseline_ticker, start=fetch_start, end=datetime.now(), progress=False)
+                        
                     if base_raw.empty:
                         st.error(f"致命错误：宏观基准 {baseline_ticker} 物理数据断联，无法提供引力锚点。")
                         st.stop()
                         
-                    base_data = base_raw['Close']
+                    price_col = 'Adj Close' if 'Adj Close' in base_raw.columns else 'Close'
+                    base_data = base_raw[price_col]
                     if isinstance(base_data, pd.DataFrame): 
                         base_data = base_data.iloc[:, 0]
                     base_data.index = pd.to_datetime(base_data.index).tz_localize(None)
@@ -853,22 +824,24 @@ try:
                     
                     for sector_name, ticker in sector_map.items():
                         try:
-                            s_data = yf.download(ticker, start=fetch_start, end=datetime.now(), progress=False)
+                            # 🚨 核心修复：智能路由
+                            if ".SS" in ticker or ".SZ" in ticker:
+                                s_data = get_akshare_etf_data(ticker, fetch_start, datetime.now())
+                            else:
+                                s_data = yf.download(ticker, start=fetch_start, end=datetime.now(), progress=False)
+                                
                             if s_data.empty: 
                                 sector_results.append({"行业板块": sector_name, "代码": ticker, "资金状态判定": "❌ 抓取为空", "RS 20日斜率 (中期)": "-", "RS 5日斜率 (短期)": "-", "偏离 50MA (拥挤度)": "-"})
                                 continue
                             
-                            # 🚨 终极复权装甲：优先抓取 Adj Close，若 YF 引擎未提供则自动降级为 Close
                             price_col = 'Adj Close' if 'Adj Close' in s_data.columns else 'Close'
                             s_close = s_data[price_col].iloc[:, 0] if isinstance(s_data.columns, pd.MultiIndex) else s_data[price_col]
                            
                             s_close.index = pd.to_datetime(s_close.index).tz_localize(None)
                             s_close = s_close.ffill().dropna()
                             
-                            # 物理对齐时间轴
                             df_merge = pd.DataFrame({'Target': s_close, 'Base': base_data}).ffill().dropna()
                             
-                            # 🚨 核心修复 3：降低交易日门槛至 40，防止跨国比较时因假期抹除数据
                             if len(df_merge) < 40: 
                                 sector_results.append({"行业板块": sector_name, "代码": ticker, "资金状态判定": f"❌ 有效对齐天数仅 {len(df_merge)}", "RS 20日斜率 (中期)": "-", "RS 5日斜率 (短期)": "-", "偏离 50MA (拥挤度)": "-"})
                                 continue
@@ -894,12 +867,10 @@ try:
                                 "偏离 50MA (拥挤度)": f"{price_to_ma50*100:+.2f}%"
                             })
                         except Exception as e:
-                            # 🚨 绝对禁止静默：把死亡原因写在脸上
                             sector_results.append({"行业板块": sector_name, "代码": ticker, "资金状态判定": f"❌ 运算断裂: {str(e)[:15]}", "RS 20日斜率 (中期)": -999, "RS 5日斜率 (短期)": "-", "偏离 50MA (拥挤度)": "-"})
                     
                     if sector_results:
                         res_df = pd.DataFrame(sector_results)
-                        # 将数值列转换为显示用的百分比格式，处理错误标记
                         res_df['排序锚点'] = pd.to_numeric(res_df['RS 20日斜率 (中期)'], errors='coerce').fillna(-999)
                         res_df = res_df.sort_values(by="排序锚点", ascending=False).drop(columns=['排序锚点'])
                         
