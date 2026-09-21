@@ -422,8 +422,11 @@ try:
                     sniper_results.append({"资产代码": t, "系统指令": "❌ 物理数据抓取为空", "RS前置斜率": "-", "RS当前斜率": "-", "当前价/200MA": "-", "量能倍率(VR)": "-"})
                     continue
                     
-                t_close = t_data['Adj Close'].iloc[:, 0] if isinstance(t_data.columns, pd.MultiIndex) else t_data['Adj Close']
+                # 🚨 终极复权装甲：优先抓取 Adj Close，若 YF 引擎未提供则自动降级为 Close
+                price_col = 'Adj Close' if 'Adj Close' in t_data.columns else 'Close'
+                t_close = t_data[price_col].iloc[:, 0] if isinstance(t_data.columns, pd.MultiIndex) else t_data[price_col]
                 t_vol = t_data['Volume'].iloc[:, 0] if isinstance(t_data.columns, pd.MultiIndex) else t_data['Volume']
+
                 
                 # 🚨 强制时区粉碎，确保跨国资产（美股/A股）时间轴能完美对齐
                 t_close.index = pd.to_datetime(t_close.index).tz_localize(None)
@@ -855,7 +858,10 @@ try:
                                 sector_results.append({"行业板块": sector_name, "代码": ticker, "资金状态判定": "❌ 抓取为空", "RS 20日斜率 (中期)": "-", "RS 5日斜率 (短期)": "-", "偏离 50MA (拥挤度)": "-"})
                                 continue
                             
-                            s_close = s_data['Close'].iloc[:, 0] if isinstance(s_data.columns, pd.MultiIndex) else s_data['Close']
+                            # 🚨 终极复权装甲：优先抓取 Adj Close，若 YF 引擎未提供则自动降级为 Close
+                            price_col = 'Adj Close' if 'Adj Close' in s_data.columns else 'Close'
+                            s_close = s_data[price_col].iloc[:, 0] if isinstance(s_data.columns, pd.MultiIndex) else s_data[price_col]
+                           
                             s_close.index = pd.to_datetime(s_close.index).tz_localize(None)
                             s_close = s_close.ffill().dropna()
                             
