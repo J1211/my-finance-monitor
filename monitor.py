@@ -442,6 +442,20 @@ try:
     with tabs[3]:
         st.subheader("🎯 Alpha 审计 (Relative Strength)")
         
+        # --- 新增：碳基接管模块 (Manual Override) ---
+        with st.expander("🛠️ 碳基接管：200MA 物理修正端口", expanded=True):
+            st.markdown("当 API 被墙或历史复权错误时，系统将自动提取短期真实量价 (VR/RS)，但 **200MA 引力线需由你手动注入**。")
+            override_str = st.text_input("输入真实 200MA (格式: 代码:数值, 逗号分隔。例: 515880.SS:1.05, 159558.SZ:0.88)", "")
+            manual_ma = {}
+            if override_str:
+                try:
+                    for item in override_str.split(','):
+                        k, v = item.split(':')
+                        manual_ma[k.strip()] = float(v.strip())
+                    st.success(f"✅ 物理锚点已手动注入: {manual_ma}")
+                except Exception:
+                    st.error("🚨 格式错误。请严格使用 '标的:数值' 格式。")
+
         # --- 模块 1：战略资产猎杀雷达 (动态槽位) ---
         st.write("### 🦅 猎杀雷达：RS 拐点与 200MA 突破监测")
         
@@ -456,92 +470,100 @@ try:
                 
         benchmark_ticker = 'as300' 
         
-        sniper_results = []
-        for t in sniper_tickers:
-            try:
-                # 🚨 核心修复：智能路由，A股ETF走AkShare前复权，其他走YF
-                if ".SS" in t or ".SZ" in t:
-                    t_data = get_akshare_etf_data(t, df.index[0] - timedelta(days=300), datetime.now())
-                else:
-                    t_data = yf.download(t, start=df.index[0] - timedelta(days=300), end=datetime.now(), progress=False)
-                
-                if t_data.empty: 
-                    sniper_results.append({"资产代码": t, "系统指令": "❌ 物理数据抓取为空", "RS前置斜率": "-", "RS当前斜率": "-", "当前价/200MA": "-", "量能倍率(VR)": "-"})
-                    continue
+        if st.button("📡 扫描雷达"):
+            sniper_results = []
+            for t in sniper_tickers:
+                try:
+                    # 1. 尝试 AkShare (国内 IP 完美复权)
+                    t_data = pd.DataFrame()
+                    if ".SS" in t or ".SZ" in t:
+                        t_data = get_akshare_etf_data(t, df.index[0] - timedelta(days=300), datetime.now())
                     
-                price_col = 'Adj Close' if 'Adj Close' in t_data.columns else 'Close'
-                t_close = t_data[price_col].iloc[:, 0] if isinstance(t_data.columns, pd.MultiIndex) else t_data[price_col]
-                t_vol = t_data['Volume'].iloc[:, 0] if isinstance(t_data.columns, pd.MultiIndex) else t_data['Volume']
-
-                
-                # 🚨 强制时区粉碎，确保跨国资产（美股/A股）时间轴能完美对齐
-                t_close.index = pd.to_datetime(t_close.index).tz_localize(None)
-                t_vol.index = pd.to_datetime(t_vol.index).tz_localize(None)
-                
-                # 计算 200MA (防范上市不足 200 天的新股)
-                if len(t_close) < 200: 
-                    sniper_results.append({"资产代码": t, "系统指令": "⚠️ 上市不足200天，无引力参考", "RS前置斜率": "-", "RS当前斜率": "-", "当前价/200MA": "-", "量能倍率(VR)": "-"})
-                    continue
-                ma200 = t_close.rolling(200).mean()
-                
-                # 1. 200MA 突破判定：今日站上且 3 日前在下方
-                is_breakout = (t_close.iloc[-1] > ma200.iloc[-1]) and (t_close.iloc[-4] < ma200.iloc[-4])
-                
-                # 2. 量能燃料判定：VR > 1.5
-                vr = t_vol.iloc[-1] / t_vol.iloc[-6:-1].mean()
-                is_forceful = vr > 1.5
-                
-                # 3. RS 斜率拐点判定
-                rs_df = pd.DataFrame({'target': t_close, 'base': df[benchmark_ticker]}).ffill().dropna()
-                if len(rs_df) < 25: 
-                    sniper_results.append({"资产代码": t, "系统指令": "⚠️ 动能对比数据不足", "RS前置斜率": "-", "RS当前斜率": "-", "当前价/200MA": "-", "量能倍率(VR)": "-"})
-                    continue
-                
-                rs_curve = rs_df['target'] / rs_df['base']
-                current_slope = (rs_curve.iloc[-1] / rs_curve.iloc[-10]) - 1
-                prev_slope = (rs_curve.iloc[-10] / rs_curve.iloc[-20]) - 1
-                
-                # 由负转正
-                rs_turned_positive = (prev_slope < 0) and (current_slope > 0)
-                
-                # 综合战术裁决
-                if is_breakout and is_forceful and rs_turned_positive:
-                    action = "🔥 猎杀确认 (全条件达成)"
-                elif rs_turned_positive:
-                    action = "🟡 RS 苏醒 (等待 200MA 突破)"
-                elif is_breakout and not is_forceful:
-                    action = "⚠️ 无量诱多 (VR不足)"
-                else:
-                    action = "❄️ 重力压制中 (蛰伏)"
+                    # 2. 降级防线：如果 AkShare 失败，强行调用 YF 获取短期真实数据
+                    if t_data.empty:
+                        t_data = yf.download(t, start=df.index[0] - timedelta(days=300), end=datetime.now(), progress=False)
                     
-                sniper_results.append({
-                    "资产代码": t,
-                    "RS前置斜率": f"{prev_slope*100:.2f}%",
-                    "RS当前斜率": f"{current_slope*100:.2f}%",
-                    "当前价/200MA": f"{(t_close.iloc[-1]/ma200.iloc[-1]):.2f}",
-                    "量能倍率(VR)": f"{vr:.2f}",
-                    "系统指令": action
-                })
-            except Exception as e:
-                # 绝对不静默：如果代码崩溃，把错误直接打印在面板上
-                sniper_results.append({"资产代码": t, "系统指令": f"❌ 运算断裂", "RS前置斜率": "-", "RS当前斜率": "-", "当前价/200MA": "-", "量能倍率(VR)": "-"})
-
-        if sniper_results:
-            st.table(pd.DataFrame(sniper_results))
-        else:
-            st.info("雷达扫描中：未获取到标的物理数据。")
+                    if t_data.empty: 
+                        sniper_results.append({"资产代码": t, "系统指令": "❌ 彻底断联", "RS前置斜率": "-", "RS当前斜率": "-", "当前价/200MA": "-", "量能倍率(VR)": "-"})
+                        continue
+                        
+                    price_col = 'Adj Close' if 'Adj Close' in t_data.columns else 'Close'
+                    t_close = t_data[price_col].iloc[:, 0] if isinstance(t_data.columns, pd.MultiIndex) else t_data[price_col]
+                    t_vol = t_data['Volume'].iloc[:, 0] if isinstance(t_data.columns, pd.MultiIndex) else t_data['Volume']
+    
+                    t_close.index = pd.to_datetime(t_close.index).tz_localize(None)
+                    t_vol.index = pd.to_datetime(t_vol.index).tz_localize(None)
+                    
+                    current_price = t_close.iloc[-1]
+                    
+                    # 🚨 核心逻辑：碳基接管 vs 硅基计算
+                    if t in manual_ma:
+                        ma200_val = manual_ma[t]
+                        # 手动模式下，只要当前价大于手动 200MA 即视为突破
+                        is_breakout = current_price > ma200_val 
+                        ma_status = f"{(current_price / ma200_val):.2f} (手动)"
+                    else:
+                        if len(t_close) < 200: 
+                            sniper_results.append({"资产代码": t, "系统指令": "⚠️ 上市不足200天", "RS前置斜率": "-", "RS当前斜率": "-", "当前价/200MA": "-", "量能倍率(VR)": "-"})
+                            continue
+                        ma200_series = t_close.rolling(200).mean()
+                        ma200_val = ma200_series.iloc[-1]
+                        is_breakout = (current_price > ma200_val) and (t_close.iloc[-4] < ma200_series.iloc[-4])
+                        ma_status = f"{(current_price / ma200_val):.2f}"
+                    
+                    # 计算短期真实动能 (不受长线复权影响)
+                    vr = t_vol.iloc[-1] / t_vol.iloc[-6:-1].mean()
+                    is_forceful = vr > 1.5
+                    
+                    rs_df = pd.DataFrame({'target': t_close, 'base': df[benchmark_ticker]}).ffill().dropna()
+                    if len(rs_df) < 25: 
+                        continue
+                    
+                    rs_curve = rs_df['target'] / rs_df['base']
+                    current_slope = (rs_curve.iloc[-1] / rs_curve.iloc[-10]) - 1
+                    prev_slope = (rs_curve.iloc[-10] / rs_curve.iloc[-20]) - 1
+                    
+                    rs_turned_positive = (prev_slope < 0) and (current_slope > 0)
+                    
+                    # 综合战术裁决
+                    if is_breakout and is_forceful and rs_turned_positive:
+                        action = "🔥 猎杀确认 (全条件达成)"
+                    elif rs_turned_positive:
+                        action = "🟡 RS 苏醒 (等待 200MA 突破)"
+                    elif is_breakout and not is_forceful:
+                        action = "⚠️ 无量诱多 (VR不足)"
+                    else:
+                        action = "❄️ 重力压制中 (蛰伏)"
+                        
+                    sniper_results.append({
+                        "资产代码": t,
+                        "RS前置斜率": f"{prev_slope*100:.2f}%",
+                        "RS当前斜率": f"{current_slope*100:.2f}%",
+                        "当前价/200MA": ma_status,
+                        "量能倍率(VR)": f"{vr:.2f}",
+                        "系统指令": action
+                    })
+                except Exception as e:
+                    sniper_results.append({"资产代码": t, "系统指令": f"❌ 运算断裂", "RS前置斜率": "-", "RS当前斜率": "-", "当前价/200MA": "-", "量能倍率(VR)": "-"})
+    
+            if sniper_results:
+                st.table(pd.DataFrame(sniper_results))
+            else:
+                st.info("雷达扫描中：未获取到标的物理数据。")
             
         st.write("---")
         
-        # --- 模块 2：保留的原有单项深度动能扫描 (并恢复图表) ---
+        # --- 模块 2：单项深度动能扫描 ---
         st.write("### 🔍 单项深度动能扫描")
         audit_ticker = st.text_input("输入要详细审计的标的代码", "159326.SZ", key="single_audit")
         if audit_ticker:
             try:
-                # 🚨 核心修复：智能路由
                 if ".SS" in audit_ticker or ".SZ" in audit_ticker:
                     a_data = get_akshare_etf_data(audit_ticker, df.index[0]-timedelta(days=300), datetime.now())
                 else:
+                    a_data = pd.DataFrame()
+                    
+                if a_data.empty:
                     a_data = yf.download(audit_ticker, start=df.index[0]-timedelta(days=300), end=datetime.now(), progress=False)
                 
                 if not a_data.empty:
@@ -572,6 +594,7 @@ try:
                     st.plotly_chart(fig_rs.update_layout(height=400, template="plotly_dark", legend=dict(orientation="h", y=1.1)), use_container_width=True)
             except Exception as e:
                 st.warning(f"系统无法审计该标的，物理断裂原因: {e}")
+    
         
     with tabs[4]:
         st.subheader("🏛️ 债市重力与熵增审计")
