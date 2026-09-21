@@ -456,17 +456,39 @@ try:
                 except Exception:
                     st.error("🚨 格式错误。请严格使用 '标的:数值' 格式。")
 
-        # --- 模块 1：战略资产猎杀雷达 (动态槽位) ---
-        st.write("### 🦅 猎杀雷达：RS 拐点与 200MA 突破监测")
+        # --- 模块 1：战略资产猎杀雷达 (动态槽位 & 焦距切换) ---
+        st.write("### 🦅 猎杀雷达：RS 拐点与引力场突破监测")
+        
+        # 🚨 新增：引力焦距调节阀
+        ma_period = st.radio(
+            "🔭 选择雷达引力刻度 (MA焦距)", 
+            options=[50, 60, 120, 200, 250], 
+            index=3, 
+            horizontal=True,
+            help="50/60MA 适合捕捉 B 阶段高波动资产的中期主升浪；200/250MA 适合确认 C 阶段资产的长期宏观反转。"
+        )
+        
+        st.caption("💡 提示：若 API 历史复权错误，可直接在槽位中输入 `代码:真实均线价` 进行碳基接管 (例: 515880.SS:1.08)。")
         
         default_snipers = ['515880.SS', '159558.SZ', '159326.SZ', '512400.SS', '512670.SS']
         sniper_cols = st.columns(5)
         sniper_tickers = []
+        manual_ma = {}
         
+        # 🚨 核心修复：槽位融合解析逻辑
         for i in range(5):
             val = sniper_cols[i].text_input(f"猎杀槽位 {i+1}", default_snipers[i])
             if val:
-                sniper_tickers.append(val.strip())
+                if ":" in val:
+                    parts = val.split(":")
+                    tkr = parts[0].strip()
+                    sniper_tickers.append(tkr)
+                    try:
+                        manual_ma[tkr] = float(parts[1].strip())
+                    except:
+                        pass
+                else:
+                    sniper_tickers.append(val.strip())
                 
         benchmark_ticker = 'as300' 
         
@@ -484,7 +506,7 @@ try:
                         t_data = yf.download(t, start=df.index[0] - timedelta(days=300), end=datetime.now(), progress=False)
                     
                     if t_data.empty: 
-                        sniper_results.append({"资产代码": t, "系统指令": "❌ 彻底断联", "RS前置斜率": "-", "RS当前斜率": "-", "当前价/200MA": "-", "量能倍率(VR)": "-"})
+                        sniper_results.append({"资产代码": t, "系统指令": "❌ 彻底断联", "RS前置斜率": "-", "RS当前斜率": "-", f"当前价/{ma_period}MA": "-", "量能倍率(VR)": "-"})
                         continue
                         
                     price_col = 'Adj Close' if 'Adj Close' in t_data.columns else 'Close'
@@ -496,22 +518,21 @@ try:
                     
                     current_price = t_close.iloc[-1]
                     
-                    # 🚨 核心逻辑：碳基接管 vs 硅基计算
+                    # 🚨 核心逻辑：动态 MA 焦距与碳基接管
                     if t in manual_ma:
-                        ma200_val = manual_ma[t]
-                        # 手动模式下，只要当前价大于手动 200MA 即视为突破
-                        is_breakout = current_price > ma200_val 
-                        ma_status = f"{(current_price / ma200_val):.2f} (手动)"
+                        ma_val = manual_ma[t]
+                        is_breakout = current_price > ma_val 
+                        ma_status = f"{(current_price / ma_val):.2f} (手动)"
                     else:
-                        if len(t_close) < 200: 
-                            sniper_results.append({"资产代码": t, "系统指令": "⚠️ 上市不足200天", "RS前置斜率": "-", "RS当前斜率": "-", "当前价/200MA": "-", "量能倍率(VR)": "-"})
+                        if len(t_close) < ma_period: 
+                            sniper_results.append({"资产代码": t, "系统指令": f"⚠️ 上市不足{ma_period}天", "RS前置斜率": "-", "RS当前斜率": "-", f"当前价/{ma_period}MA": "-", "量能倍率(VR)": "-"})
                             continue
-                        ma200_series = t_close.rolling(200).mean()
-                        ma200_val = ma200_series.iloc[-1]
-                        is_breakout = (current_price > ma200_val) and (t_close.iloc[-4] < ma200_series.iloc[-4])
-                        ma_status = f"{(current_price / ma200_val):.2f}"
+                        ma_series = t_close.rolling(ma_period).mean()
+                        ma_val = ma_series.iloc[-1]
+                        is_breakout = (current_price > ma_val) and (t_close.iloc[-4] < ma_series.iloc[-4])
+                        ma_status = f"{(current_price / ma_val):.2f}"
                     
-                    # 计算短期真实动能 (不受长线复权影响)
+                    # 计算短期真实动能
                     vr = t_vol.iloc[-1] / t_vol.iloc[-6:-1].mean()
                     is_forceful = vr > 1.5
                     
@@ -525,11 +546,8 @@ try:
                     
                     rs_turned_positive = (prev_slope < 0) and (current_slope > 0)
                     
-                    # 综合战术裁决
-                    # --- 🚨 核心修复：二维流体力学决策树 ---
-                    # 第一维度：是否摆脱重力黑洞 (在 200MA 上方)
+                    # 🚨 二维流体力学决策树
                     if is_breakout:
-                        # 在 200MA 上方的状态细分
                         if is_forceful and current_slope > 0:
                             action = "🔥 强势主升 (全条件达成)"
                         elif not is_forceful and current_slope > 0:
@@ -537,31 +555,29 @@ try:
                         else:
                             action = "🩸 动能背离 (RS跑输大盘)"
                     else:
-                        # 第二维度：在 200MA 下方 (重力黑洞中) 的状态细分
                         if rs_turned_positive and is_forceful:
                             action = "🟡 底部抢筹 (左侧放量异动)"
                         elif rs_turned_positive and not is_forceful:
-                            action = "🌱 RS 苏醒 (等待突破200MA)"
+                            action = f"🌱 RS 苏醒 (等待突破{ma_period}MA)"
                         else:
                             action = "❄️ 重力压制中 (蛰伏)"
-
                         
                     sniper_results.append({
                         "资产代码": t,
                         "RS前置斜率": f"{prev_slope*100:.2f}%",
                         "RS当前斜率": f"{current_slope*100:.2f}%",
-                        "当前价/200MA": ma_status,
+                        f"当前价/{ma_period}MA": ma_status,
                         "量能倍率(VR)": f"{vr:.2f}",
                         "系统指令": action
                     })
                 except Exception as e:
-                    sniper_results.append({"资产代码": t, "系统指令": f"❌ 运算断裂", "RS前置斜率": "-", "RS当前斜率": "-", "当前价/200MA": "-", "量能倍率(VR)": "-"})
+                    sniper_results.append({"资产代码": t, "系统指令": f"❌ 运算断裂", "RS前置斜率": "-", "RS当前斜率": "-", f"当前价/{ma_period}MA": "-", "量能倍率(VR)": "-"})
     
             if sniper_results:
                 st.table(pd.DataFrame(sniper_results))
             else:
                 st.info("雷达扫描中：未获取到标的物理数据。")
-            
+                   
         st.write("---")
         
         # --- 模块 2：单项深度动能扫描 ---
