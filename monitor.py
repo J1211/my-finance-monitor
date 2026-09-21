@@ -1040,12 +1040,20 @@ try:
                         st.markdown("### 📊 行业资金虹吸排行榜")
                         st.caption("注：按 RS 20日斜率降序排列。排在顶部的行业正在抽干底部的血液。出现 ❌ 代表该探头遭遇数据黑洞。")
                         
+                        # 🚨 核心修复：运用底层热力学渲染，增加动能突变的高对比度警报
                         def color_state(val):
-                            if "吸筹" in str(val): return 'color: #00ffcc; font-weight: bold;'
-                            elif "失血" in str(val): return 'color: #FF3131; font-weight: bold;'
-                            elif "❌" in str(val): return 'color: #ff00ff; font-weight: bold;'
-                            return 'color: #aaa;'
-                            
+                            if "吸筹" in str(val): 
+                                return 'color: #00ffcc; font-weight: bold;' # 青绿色：平稳流入
+                            elif "失血" in str(val): 
+                                return 'color: #FF3131; font-weight: bold;' # 血红色：平稳流出
+                            elif "点火" in str(val): 
+                                return 'color: #FFD700; font-weight: bold;' # 黄金色：短期向上动能爆炸
+                            elif "砸盘" in str(val): 
+                                return 'color: #FF8C00; font-weight: bold;' # 橙红色：短期向下动能突变
+                            elif "❌" in str(val): 
+                                return 'color: #ff00ff; font-weight: bold;' # 紫红色：数据黑洞
+                            return 'color: #aaa;' # 灰色：随波逐流的背景噪音
+                                                   
                         st.dataframe(res_df.style.map(color_state, subset=['资金状态判定']), use_container_width=True)
                         
                 except Exception as e:
